@@ -32,6 +32,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) · Versioning: 
 - `reqwest` switched to `rustls-tls` (eliminates dynamic `libssl` dependency)
 - Deploy flow: cross-compile locally → scp binary → `Dockerfile.prebuilt` rebuild (~3 min)
 
+**Repo cleanup**
+
+- Removed 7 obsolete scripts (legacy SQLite architecture)
+- Removed 12 disabled CI workflow files
+- Removed `docs/book/` (empty mdBook stubs), duplicate PDFs, redundant API reference
+- Removed `Dockerfile.static`, `docker-compose.yml`, `docker-compose.deploy.yml` (unused)
+- Archived `docs/camara/`, `docs/es/`, architecture comparisons, client PDFs → `docs/archive/`
+- Moved `ALIAS_API.md`, `ALIAS_DESIGN.md` → `docs/architecture/`
+
 ---
 
 ### 2026-05-19

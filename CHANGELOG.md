@@ -6,6 +6,34 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) · Versioning: 
 
 ## [Unreleased]
 
+### 2026-05-21
+
+**Alias registry — zero-knowledge alias system**
+
+- `POST /alias/register` — register alias commitment (SHA3-256) with Ed25519 signature verification
+- `POST /alias/resolve` — resolve commitment to DID + address; returns 410 if revoked
+- `POST /alias/revoke` — owner-only revocation with 15-day cooldown before re-registration
+- One alias per DID; duplicate commitment returns 409
+- `AliasEntry` type: commitment, DID, salt, encrypted alias, status, timestamps
+- Storage: `aliases` column family (RocksDB) with `did:` secondary index for reverse lookup
+
+**Invitation system — governance proposal invitations via alias**
+
+- `POST /governance/invitations` — create invitation linked to alias commitment
+- `GET /governance/invitations?voter={commitment}` — list pending invitations
+- `POST /governance/invitations/respond` — accept or reject with Ed25519 signature
+- Rate limit: max 5 invitations per hour per DID, max 20 proposals per invitation
+- `Invitation` type with response tracking (responded, accepted)
+- Storage: `invitations` column family (RocksDB)
+
+**Deploy pipeline — local cross-compilation**
+
+- `Cross.toml` added for macOS → Linux amd64 cross-compilation
+- `reqwest` switched to `rustls-tls` (eliminates dynamic `libssl` dependency)
+- Deploy flow: cross-compile locally → scp binary → `Dockerfile.prebuilt` rebuild (~3 min)
+
+---
+
 ### 2026-05-19
 
 **Vault recovery via passphrase-derived key (NIST SP 800-185)**

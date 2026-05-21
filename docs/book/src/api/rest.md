@@ -1,2 +1,0 @@
-# rest
-Content coming soon.

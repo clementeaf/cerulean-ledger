@@ -237,6 +237,51 @@ pub struct HistoryEntry {
     pub is_delete: bool,
 }
 
+/// Alias registry entry — maps a SHA3-256 commitment to a DID.
+///
+/// The commitment is `SHA3-256(salt || alias)` where the salt is deterministic:
+/// `SHA3-256("cerulean:alias:salt:" || alias)[0..16]`. The node never sees the
+/// plaintext alias — only the commitment and an encrypted blob for self-recovery.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AliasEntry {
+    /// SHA3-256 commitment (64 hex chars).
+    pub commitment: String,
+    /// DID that owns this alias.
+    pub did: String,
+    /// Deterministic salt (32 hex chars = 16 bytes).
+    pub salt: String,
+    /// AES-256-GCM encrypted alias (opaque, hex-encoded). Only the wallet owner can decrypt.
+    pub encrypted_alias: String,
+    /// Unix timestamp of registration.
+    pub registered_at: u64,
+    /// "active" or "revoked".
+    pub status: String,
+    /// Unix timestamp when revoked (if applicable).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revoked_at: Option<u64>,
+}
+
+/// An invitation to participate in governance proposals.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Invitation {
+    /// Unique invitation ID.
+    pub id: String,
+    /// DID of the inviter.
+    pub from_did: String,
+    /// Alias commitment of the invitee (resolved to DID on lookup).
+    pub to_commitment: String,
+    /// Proposal IDs included in this invitation (max 20).
+    pub proposal_ids: Vec<u64>,
+    /// Ed25519 signature from the inviter (hex).
+    pub signature: String,
+    /// Unix timestamp of creation.
+    pub created_at: u64,
+    /// Whether the invitee has responded.
+    pub responded: bool,
+    /// true = accepted, false = rejected (meaningful only when responded = true).
+    pub accepted: bool,
+}
+
 /// BlockStore trait - main storage interface
 pub trait BlockStore: Send + Sync {
     /// Write a block to storage
@@ -541,6 +586,59 @@ pub trait BlockStore: Send + Sync {
         &self,
         _asset_id: &str,
     ) -> StorageResult<Vec<crate::registry::compliance::ComplianceResult>> {
+        Ok(vec![])
+    }
+
+    // ── Alias Registry ────────────────────────────────────────────────────
+
+    /// Store an alias entry keyed by commitment.
+    fn write_alias(&self, _entry: &AliasEntry) -> StorageResult<()> {
+        Ok(())
+    }
+
+    /// Read an alias entry by commitment.
+    fn read_alias(&self, _commitment: &str) -> StorageResult<AliasEntry> {
+        Err(super::errors::StorageError::KeyNotFound(
+            "alias not found".into(),
+        ))
+    }
+
+    /// Find the active alias entry for a DID (reverse lookup).
+    fn read_alias_by_did(&self, _did: &str) -> StorageResult<AliasEntry> {
+        Err(super::errors::StorageError::KeyNotFound(
+            "alias not found for DID".into(),
+        ))
+    }
+
+    /// Delete an alias entry by commitment.
+    fn delete_alias(&self, _commitment: &str) -> StorageResult<()> {
+        Ok(())
+    }
+
+    // ── Invitations ─────────────────────────────────────────────────────
+
+    /// Store an invitation.
+    fn write_invitation(&self, _invitation: &Invitation) -> StorageResult<()> {
+        Ok(())
+    }
+
+    /// Read an invitation by ID.
+    fn read_invitation(&self, _id: &str) -> StorageResult<Invitation> {
+        Err(super::errors::StorageError::KeyNotFound(
+            "invitation not found".into(),
+        ))
+    }
+
+    /// List invitations where the invitee commitment matches.
+    fn list_invitations_by_commitment(
+        &self,
+        _to_commitment: &str,
+    ) -> StorageResult<Vec<Invitation>> {
+        Ok(vec![])
+    }
+
+    /// List invitations sent by a given DID.
+    fn list_invitations_by_sender(&self, _from_did: &str) -> StorageResult<Vec<Invitation>> {
         Ok(vec![])
     }
 

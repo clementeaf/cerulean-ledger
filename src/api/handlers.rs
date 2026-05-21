@@ -1,6 +1,7 @@
 //! API Handler functions for endpoints
 
 pub mod acl;
+pub mod alias;
 pub mod audit;
 pub mod blocks;
 pub mod chain;
@@ -21,6 +22,7 @@ pub mod governance_entities;
 pub mod identity;
 pub mod intelligence;
 pub mod interop;
+pub mod invitations;
 pub mod legal_oracle;
 pub mod msp;
 pub mod oracle;

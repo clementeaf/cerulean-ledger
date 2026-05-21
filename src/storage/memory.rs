@@ -5,7 +5,8 @@ use std::sync::Mutex;
 
 use super::errors::{StorageError, StorageResult};
 use super::traits::{
-    Acta, Assembly, Block, BlockStore, Credential, IdentityRecord, Scope, Session, Transaction,
+    Acta, AliasEntry, Assembly, Block, BlockStore, Credential, IdentityRecord, Invitation, Scope,
+    Session, Transaction,
 };
 use crate::registry::compliance::{ComplianceResult, ComplianceRule};
 use crate::registry::tokenization::AssetToken;
@@ -44,6 +45,10 @@ pub struct MemoryStore {
     compliance_rules: Mutex<HashMap<String, ComplianceRule>>,
     /// Compliance results: id → ComplianceResult
     compliance_results: Mutex<HashMap<String, ComplianceResult>>,
+    /// Alias registry: commitment → AliasEntry
+    aliases: Mutex<HashMap<String, AliasEntry>>,
+    /// Invitations: id → Invitation
+    invitations: Mutex<HashMap<String, Invitation>>,
 }
 
 impl MemoryStore {
@@ -67,6 +72,8 @@ impl MemoryStore {
             asset_tokens: Mutex::new(HashMap::new()),
             compliance_rules: Mutex::new(HashMap::new()),
             compliance_results: Mutex::new(HashMap::new()),
+            aliases: Mutex::new(HashMap::new()),
+            invitations: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -548,6 +555,84 @@ impl BlockStore for MemoryStore {
             .unwrap()
             .values()
             .filter(|r| r.asset_id == asset_id)
+            .cloned()
+            .collect())
+    }
+
+    // ── Alias Registry ──────────────────────────────────────────────────
+
+    fn write_alias(&self, entry: &AliasEntry) -> StorageResult<()> {
+        self.aliases
+            .lock()
+            .unwrap()
+            .insert(entry.commitment.clone(), entry.clone());
+        Ok(())
+    }
+
+    fn read_alias(&self, commitment: &str) -> StorageResult<AliasEntry> {
+        self.aliases
+            .lock()
+            .unwrap()
+            .get(commitment)
+            .cloned()
+            .ok_or_else(|| StorageError::KeyNotFound(format!("alias:{commitment}")))
+    }
+
+    fn read_alias_by_did(&self, did: &str) -> StorageResult<AliasEntry> {
+        self.aliases
+            .lock()
+            .unwrap()
+            .values()
+            .find(|e| e.did == did && e.status == "active")
+            .cloned()
+            .ok_or_else(|| StorageError::KeyNotFound(format!("alias for DID:{did}")))
+    }
+
+    fn delete_alias(&self, commitment: &str) -> StorageResult<()> {
+        self.aliases.lock().unwrap().remove(commitment);
+        Ok(())
+    }
+
+    // ── Invitations ─────────────────────────────────────────────────────
+
+    fn write_invitation(&self, invitation: &Invitation) -> StorageResult<()> {
+        self.invitations
+            .lock()
+            .unwrap()
+            .insert(invitation.id.clone(), invitation.clone());
+        Ok(())
+    }
+
+    fn read_invitation(&self, id: &str) -> StorageResult<Invitation> {
+        self.invitations
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .ok_or_else(|| StorageError::KeyNotFound(format!("invitation:{id}")))
+    }
+
+    fn list_invitations_by_commitment(
+        &self,
+        to_commitment: &str,
+    ) -> StorageResult<Vec<Invitation>> {
+        Ok(self
+            .invitations
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|i| i.to_commitment == to_commitment)
+            .cloned()
+            .collect())
+    }
+
+    fn list_invitations_by_sender(&self, from_did: &str) -> StorageResult<Vec<Invitation>> {
+        Ok(self
+            .invitations
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|i| i.from_did == from_did)
             .cloned()
             .collect())
     }

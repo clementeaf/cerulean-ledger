@@ -3,11 +3,11 @@ use actix_web::{web, Scope};
 #[cfg(feature = "evm")]
 use crate::api::handlers::evm;
 use crate::api::handlers::{
-    acl, audit, blocks, chain, chaincode, channels, compliance, compliance_auto, contact,
+    acl, alias, audit, blocks, chain, chaincode, channels, compliance, compliance_auto, contact,
     credentials, discovery, events, forensic, gateway, governance, governance_entities, identity,
-    intelligence, interop, legal_oracle, msp, oracle, organizations, pentest, pin, private_data,
-    proposals, registry, regulatory, snapshots, stress, tokenization, transactions, utilities,
-    vault, zkp,
+    intelligence, interop, invitations, legal_oracle, msp, oracle, organizations, pentest, pin,
+    private_data, proposals, registry, regulatory, snapshots, stress, tokenization, transactions,
+    utilities, vault, zkp,
 };
 
 /// API routes configuration
@@ -213,6 +213,14 @@ impl ApiRoutes {
         cfg.service(vault::vault_store)
             .service(vault::vault_get)
             .service(vault::vault_recover);
+        // Alias registry (zero-knowledge alias system)
+        cfg.service(alias::alias_register)
+            .service(alias::alias_resolve)
+            .service(alias::alias_revoke);
+        // Invitations (governance proposal invitations via alias)
+        cfg.service(invitations::create_invitation)
+            .service(invitations::list_invitations)
+            .service(invitations::respond_invitation);
     }
 
     fn identity_routes() -> Scope {

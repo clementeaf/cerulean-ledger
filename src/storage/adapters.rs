@@ -80,6 +80,8 @@ const CF_ASSET_EVENTS: &str = "asset_events";
 const CF_ASSET_TOKENS: &str = "asset_tokens";
 const CF_COMPLIANCE_RULES: &str = "compliance_rules";
 const CF_COMPLIANCE_RESULTS: &str = "compliance_results";
+const CF_ALIASES: &str = "aliases";
+const CF_INVITATIONS: &str = "invitations";
 
 const META_LATEST_HEIGHT: &[u8] = b"latest_height";
 
@@ -117,6 +119,8 @@ const ALL_CFS: &[&str] = &[
     CF_ASSET_TOKENS,
     CF_COMPLIANCE_RULES,
     CF_COMPLIANCE_RESULTS,
+    CF_ALIASES,
+    CF_INVITATIONS,
 ];
 
 /// RocksDB-backed block store using Column Families for data isolation
@@ -1364,6 +1368,137 @@ impl BlockStore for RocksDbBlockStore {
             }
         }
         Ok(r)
+    }
+
+    // ── Alias Registry ──────────────────────────────────────────────────
+
+    fn write_alias(&self, entry: &super::traits::AliasEntry) -> StorageResult<()> {
+        let cf = self
+            .db
+            .cf_handle(CF_ALIASES)
+            .ok_or_else(|| StorageError::RocksDbError("missing aliases CF".into()))?;
+        let json = serde_json::to_vec(entry)
+            .map_err(|e| StorageError::SerializationError(e.to_string()))?;
+        self.db
+            .put_cf(&cf, entry.commitment.as_bytes(), &json)
+            .map_err(|e| StorageError::RocksDbError(e.to_string()))?;
+        // Secondary index: did → commitment (for reverse lookup)
+        let did_key = format!("did:{}", entry.did);
+        self.db
+            .put_cf(&cf, did_key.as_bytes(), entry.commitment.as_bytes())
+            .map_err(|e| StorageError::RocksDbError(e.to_string()))?;
+        Ok(())
+    }
+
+    fn read_alias(&self, commitment: &str) -> StorageResult<super::traits::AliasEntry> {
+        let cf = self
+            .db
+            .cf_handle(CF_ALIASES)
+            .ok_or_else(|| StorageError::RocksDbError("missing aliases CF".into()))?;
+        let data = self
+            .db
+            .get_cf(&cf, commitment.as_bytes())
+            .map_err(|e| StorageError::RocksDbError(e.to_string()))?
+            .ok_or_else(|| StorageError::KeyNotFound(format!("alias:{commitment}")))?;
+        serde_json::from_slice(&data).map_err(|e| StorageError::DeserializationError(e.to_string()))
+    }
+
+    fn read_alias_by_did(&self, did: &str) -> StorageResult<super::traits::AliasEntry> {
+        let cf = self
+            .db
+            .cf_handle(CF_ALIASES)
+            .ok_or_else(|| StorageError::RocksDbError("missing aliases CF".into()))?;
+        let did_key = format!("did:{did}");
+        let commitment_bytes = self
+            .db
+            .get_cf(&cf, did_key.as_bytes())
+            .map_err(|e| StorageError::RocksDbError(e.to_string()))?
+            .ok_or_else(|| StorageError::KeyNotFound(format!("alias for DID:{did}")))?;
+        let commitment = String::from_utf8(commitment_bytes)
+            .map_err(|e| StorageError::DeserializationError(e.to_string()))?;
+        self.read_alias(&commitment)
+    }
+
+    fn delete_alias(&self, commitment: &str) -> StorageResult<()> {
+        let cf = self
+            .db
+            .cf_handle(CF_ALIASES)
+            .ok_or_else(|| StorageError::RocksDbError("missing aliases CF".into()))?;
+        // Remove secondary index first
+        if let Ok(entry) = self.read_alias(commitment) {
+            let did_key = format!("did:{}", entry.did);
+            let _ = self.db.delete_cf(&cf, did_key.as_bytes());
+        }
+        self.db
+            .delete_cf(&cf, commitment.as_bytes())
+            .map_err(|e| StorageError::RocksDbError(e.to_string()))
+    }
+
+    // ── Invitations ─────────────────────────────────────────────────────
+
+    fn write_invitation(&self, invitation: &super::traits::Invitation) -> StorageResult<()> {
+        let cf = self
+            .db
+            .cf_handle(CF_INVITATIONS)
+            .ok_or_else(|| StorageError::RocksDbError("missing invitations CF".into()))?;
+        let json = serde_json::to_vec(invitation)
+            .map_err(|e| StorageError::SerializationError(e.to_string()))?;
+        self.db
+            .put_cf(&cf, invitation.id.as_bytes(), &json)
+            .map_err(|e| StorageError::RocksDbError(e.to_string()))
+    }
+
+    fn read_invitation(&self, id: &str) -> StorageResult<super::traits::Invitation> {
+        let cf = self
+            .db
+            .cf_handle(CF_INVITATIONS)
+            .ok_or_else(|| StorageError::RocksDbError("missing invitations CF".into()))?;
+        let data = self
+            .db
+            .get_cf(&cf, id.as_bytes())
+            .map_err(|e| StorageError::RocksDbError(e.to_string()))?
+            .ok_or_else(|| StorageError::KeyNotFound(format!("invitation:{id}")))?;
+        serde_json::from_slice(&data).map_err(|e| StorageError::DeserializationError(e.to_string()))
+    }
+
+    fn list_invitations_by_commitment(
+        &self,
+        to_commitment: &str,
+    ) -> StorageResult<Vec<super::traits::Invitation>> {
+        let cf = self
+            .db
+            .cf_handle(CF_INVITATIONS)
+            .ok_or_else(|| StorageError::RocksDbError("missing invitations CF".into()))?;
+        let mut result = Vec::new();
+        for item in self.db.iterator_cf(&cf, IteratorMode::Start) {
+            let (_, v) = item.map_err(|e| StorageError::RocksDbError(e.to_string()))?;
+            let inv: super::traits::Invitation = serde_json::from_slice(&v)
+                .map_err(|e| StorageError::DeserializationError(e.to_string()))?;
+            if inv.to_commitment == to_commitment {
+                result.push(inv);
+            }
+        }
+        Ok(result)
+    }
+
+    fn list_invitations_by_sender(
+        &self,
+        from_did: &str,
+    ) -> StorageResult<Vec<super::traits::Invitation>> {
+        let cf = self
+            .db
+            .cf_handle(CF_INVITATIONS)
+            .ok_or_else(|| StorageError::RocksDbError("missing invitations CF".into()))?;
+        let mut result = Vec::new();
+        for item in self.db.iterator_cf(&cf, IteratorMode::Start) {
+            let (_, v) = item.map_err(|e| StorageError::RocksDbError(e.to_string()))?;
+            let inv: super::traits::Invitation = serde_json::from_slice(&v)
+                .map_err(|e| StorageError::DeserializationError(e.to_string()))?;
+            if inv.from_did == from_did {
+                result.push(inv);
+            }
+        }
+        Ok(result)
     }
 }
 

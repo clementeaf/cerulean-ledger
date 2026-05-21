@@ -121,7 +121,11 @@ pub async fn alias_register(
     }
 
     // Verify Ed25519 signature over commitment
-    if !verify_ed25519(&body.public_key, body.commitment.as_bytes(), &body.signature) {
+    if !verify_ed25519(
+        &body.public_key,
+        body.commitment.as_bytes(),
+        &body.signature,
+    ) {
         return Ok(HttpResponse::Unauthorized().json(ApiResponse::<()>::error(
             err_dto("INVALID_SIGNATURE", "Ed25519 signature verification failed"),
             401,
@@ -265,7 +269,11 @@ pub async fn alias_revoke(
     }
 
     // Verify Ed25519 signature
-    if !verify_ed25519(&body.public_key, body.commitment.as_bytes(), &body.signature) {
+    if !verify_ed25519(
+        &body.public_key,
+        body.commitment.as_bytes(),
+        &body.signature,
+    ) {
         return Ok(HttpResponse::Unauthorized().json(ApiResponse::<()>::error(
             err_dto("INVALID_SIGNATURE", "Ed25519 signature verification failed"),
             401,

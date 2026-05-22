@@ -71,7 +71,7 @@ pub struct AliasRegisterRequest {
     pub salt: String,
     /// AES-256-GCM encrypted alias (hex). Opaque to the node.
     pub encrypted_alias: String,
-    /// Ed25519 signature over the commitment, hex-encoded.
+    /// Ed25519 signature over `"alias:register:{commitment}"`, hex-encoded.
     pub signature: String,
 }
 
@@ -87,7 +87,7 @@ pub struct AliasRevokeRequest {
     /// Ed25519 public key (hex, 64 chars = 32 bytes).
     pub public_key: String,
     pub commitment: String,
-    /// Ed25519 signature over the commitment, hex-encoded.
+    /// Ed25519 signature over `"alias:revoke:{commitment}"`, hex-encoded.
     pub signature: String,
 }
 
@@ -120,12 +120,9 @@ pub async fn alias_register(
         )));
     }
 
-    // Verify Ed25519 signature over commitment
-    if !verify_ed25519(
-        &body.public_key,
-        body.commitment.as_bytes(),
-        &body.signature,
-    ) {
+    // Verify Ed25519 signature over "alias:register:{commitment}"
+    let register_msg = format!("alias:register:{}", body.commitment);
+    if !verify_ed25519(&body.public_key, register_msg.as_bytes(), &body.signature) {
         return Ok(HttpResponse::Unauthorized().json(ApiResponse::<()>::error(
             err_dto("INVALID_SIGNATURE", "Ed25519 signature verification failed"),
             401,
@@ -299,12 +296,9 @@ pub async fn alias_revoke(
         )));
     }
 
-    // Verify Ed25519 signature
-    if !verify_ed25519(
-        &body.public_key,
-        body.commitment.as_bytes(),
-        &body.signature,
-    ) {
+    // Verify Ed25519 signature over "alias:revoke:{commitment}"
+    let revoke_msg = format!("alias:revoke:{}", body.commitment);
+    if !verify_ed25519(&body.public_key, revoke_msg.as_bytes(), &body.signature) {
         return Ok(HttpResponse::Unauthorized().json(ApiResponse::<()>::error(
             err_dto("INVALID_SIGNATURE", "Ed25519 signature verification failed"),
             401,

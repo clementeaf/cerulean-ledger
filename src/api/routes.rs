@@ -215,6 +215,7 @@ impl ApiRoutes {
             .service(vault::vault_recover);
         // Inference (Optimistic ML Oracle)
         cfg.service(inference::submit_inference)
+            .service(inference::submit_proven)
             .service(inference::challenge_inference)
             .service(inference::finalize_inference)
             .service(inference::list_claims)

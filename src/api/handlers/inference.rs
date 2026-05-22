@@ -87,6 +87,31 @@ pub struct SubmitInferenceRequest {
     pub tolerance: OutputTolerance,
 }
 
+/// POST /inference/submit-proven — claim with ZK proof (instant finalization).
+#[derive(Deserialize)]
+pub struct SubmitProvenRequest {
+    /// Oracle ID (must be registered and staked).
+    pub oracle_id: String,
+    /// SHA3-256 hash of model weights (64 hex chars).
+    pub model_hash: String,
+    /// Human-readable model version.
+    pub model_version: String,
+    /// SHA3-256 hash of input data (64 hex chars).
+    pub input_hash: String,
+    /// Optional URI for re-execution.
+    pub input_uri: Option<String>,
+    /// Inference output (JSON-serialized).
+    pub output: String,
+    /// SHA3-256 of output (64 hex chars).
+    pub output_hash: String,
+    /// Ed25519 signature over `"inference:submit:{model_hash}:{output_hash}"`.
+    pub signature: String,
+    /// Ed25519 public key (hex, 64 chars = 32 bytes).
+    pub public_key: String,
+    /// The ZK proof attesting to the inference computation.
+    pub proof: crate::inference::proof::ZkInferenceProof,
+}
+
 #[derive(Deserialize)]
 pub struct ChallengeInferenceRequest {
     /// Claim ID to challenge.
@@ -345,6 +370,150 @@ pub async fn submit_inference(
             "id": claim.id,
             "status": "Pending",
             "dispute_deadline": claim.dispute_deadline,
+        }),
+        trace,
+    )))
+}
+
+/// POST /api/v1/inference/submit-proven — claim with ZK proof, instant finalization.
+#[post("/inference/submit-proven")]
+pub async fn submit_proven(
+    state: web::Data<AppState>,
+    body: web::Json<SubmitProvenRequest>,
+    req: HttpRequest,
+) -> ApiResult<HttpResponse> {
+    enforce_acl(
+        state.acl_provider.as_deref(),
+        state.policy_store.as_deref(),
+        "peer/Propose",
+        &req,
+    )?;
+    let trace = uuid::Uuid::new_v4().to_string();
+    let channel = channel_id_from_req(&req);
+    let store = get_channel_store(&state, channel)?;
+
+    // Validate hex fields
+    for (name, val, len) in [
+        ("model_hash", &body.model_hash, 64),
+        ("input_hash", &body.input_hash, 64),
+        ("output_hash", &body.output_hash, 64),
+    ] {
+        if val.len() != len || hex::decode(val).is_err() {
+            return Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(
+                err_dto(
+                    "INVALID_HASH",
+                    &format!("{name} must be {len} hex characters"),
+                ),
+                400,
+            )));
+        }
+    }
+
+    // Verify oracle is registered
+    {
+        let oracle_registry = state
+            .oracle_registry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if oracle_registry.get_oracle(&body.oracle_id).is_none() {
+            return Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(
+                err_dto("ORACLE_NOT_REGISTERED", "oracle is not registered"),
+                400,
+            )));
+        }
+    }
+
+    // Verify oracle is staked
+    if let Some(validator) = state.staking_manager.get_validator(&body.oracle_id) {
+        if validator.staked_amount < min_oracle_stake() {
+            return Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(
+                err_dto(
+                    "INSUFFICIENT_STAKE",
+                    &format!("oracle must stake at least {} tokens", min_oracle_stake()),
+                ),
+                400,
+            )));
+        }
+    } else {
+        return Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(
+            err_dto("ORACLE_NOT_STAKED", "oracle must be staked"),
+            400,
+        )));
+    }
+
+    // Verify Ed25519 signature
+    let submit_msg = format!("inference:submit:{}:{}", body.model_hash, body.output_hash);
+    if !verify_ed25519(&body.public_key, submit_msg.as_bytes(), &body.signature) {
+        return Ok(HttpResponse::Unauthorized().json(ApiResponse::<()>::error(
+            err_dto("INVALID_SIGNATURE", "Ed25519 signature verification failed"),
+            401,
+        )));
+    }
+
+    // Verify the ZK proof
+    use crate::inference::proof::ProofPublicInputs;
+    let inputs = ProofPublicInputs {
+        model_hash: &body.model_hash,
+        input_hash: &body.input_hash,
+        output_hash: &body.output_hash,
+    };
+
+    match state.proof_verifier.verify(&body.proof, &inputs) {
+        Ok(true) => { /* proof valid — proceed to instant finalization */ }
+        Ok(false) => {
+            return Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(
+                err_dto("INVALID_PROOF", "proof verification failed"),
+                400,
+            )));
+        }
+        Err(e) => {
+            return Ok(HttpResponse::BadRequest()
+                .json(ApiResponse::<()>::error(err_dto("PROOF_ERROR", &e), 400)));
+        }
+    }
+
+    // Create claim — immediately Finalized (no dispute window needed)
+    let now = now_secs();
+    let claim = InferenceClaim {
+        id: uuid::Uuid::new_v4().to_string(),
+        oracle_id: body.oracle_id.clone(),
+        model_hash: body.model_hash.clone(),
+        model_version: body.model_version.clone(),
+        input_hash: body.input_hash.clone(),
+        input_uri: body.input_uri.clone(),
+        output: body.output.clone(),
+        output_hash: body.output_hash.clone(),
+        timestamp: now,
+        signature: body.signature.clone(),
+        status: ClaimStatus::Finalized,
+        tolerance: OutputTolerance::Exact, // proven claims don't need tolerance
+        dispute_deadline: now,             // no window
+        finalized_at: Some(now),
+    };
+
+    store
+        .write_inference_claim(&claim)
+        .map_err(|e| ApiError::StorageError {
+            reason: e.to_string(),
+        })?;
+
+    // Update oracle reputation
+    {
+        let mut registry = state
+            .oracle_registry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(node) = registry.nodes.get_mut(&claim.oracle_id) {
+            node.update_reputation(true);
+        }
+    }
+
+    Ok(HttpResponse::Created().json(ApiResponse::success(
+        serde_json::json!({
+            "id": claim.id,
+            "status": "Finalized",
+            "proof_type": format!("{:?}", body.proof.proof_type),
+            "finalized_at": claim.finalized_at,
         }),
         trace,
     )))

@@ -25,6 +25,7 @@ mod forensic_pentest;
 mod gateway;
 mod governance;
 mod identity;
+mod inference;
 mod intelligence;
 mod legal_oracle;
 mod metrics;
@@ -855,6 +856,7 @@ async fn async_main_inner() -> std::io::Result<()> {
             .ok()
             .filter(|s| !s.is_empty())
             .map(|s| hex::decode(s.as_str()).unwrap_or_else(|_| s.into_bytes())),
+        proof_verifier: Arc::new(inference::proof::MultiVerifier::new()),
     };
 
     // Telemetry adapter: polls external APIs and ingests into Asset Registry.

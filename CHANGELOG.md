@@ -8,6 +8,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) · Versioning: 
 
 ### 2026-05-22
 
+**Optimistic ML Oracle — Phase 4 (zkML Bridge)**
+
+- `POST /api/v1/inference/submit-proven` — submit claim with ZK proof, instant finalization (no dispute window)
+- `ProofVerifier` trait: pluggable verification interface for different proof systems
+- `MultiVerifier`: dispatches proofs to the correct backend by `ProofType`
+- Shipped verifier: `Sha256CommitmentVerifier` (baseline integrity proof, not ZK)
+- Proof types defined: `Sha256Commitment`, `Groth16Bn254`, `PlonkBn254`, `StarkFri`
+- `AppState.proof_verifier` wired for runtime configuration
+- Future: plug in ezkl (Groth16) or Risc0 (STARK) for real ZK verification
+
 **Optimistic ML Oracle — Phase 3 (Non-deterministic models)**
 
 - `OutputTolerance` enum: `Exact` (hash match), `Numeric{threshold}` (absolute difference), `Cosine{min_similarity}` (vector similarity)

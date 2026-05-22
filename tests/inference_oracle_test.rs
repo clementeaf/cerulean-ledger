@@ -1116,3 +1116,205 @@ async fn http_cosine_json_embedding_field() {
     // cosine(1,0,0 · 0.95,0.1,0.05) ≈ 0.994 > 0.9 → no fraud
     assert_eq!(data["succeeded"], false);
 }
+
+// ── Phase 4: zkML Bridge Tests ───────────────────────────────────────────────
+
+/// Generate a valid SHA256 commitment proof for the given hashes.
+fn make_sha256_proof(model_hash: &str, input_hash: &str, output_hash: &str) -> serde_json::Value {
+    use pqc_crypto_module::legacy::sha256::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(model_hash.as_bytes());
+    hasher.update(input_hash.as_bytes());
+    hasher.update(output_hash.as_bytes());
+    let commitment = hex::encode(hasher.finalize());
+    serde_json::json!({
+        "proof_type": "Sha256Commitment",
+        "proof_data": commitment,
+    })
+}
+
+fn proven_submit_body(
+    model_hash: &str,
+    output_hash: &str,
+    proof: serde_json::Value,
+) -> serde_json::Value {
+    use pqc_crypto_module::legacy::ed25519::{Signer, SigningKey};
+    use rand::rngs::OsRng;
+
+    let signing_key = SigningKey::generate(&mut OsRng);
+    let public_key = signing_key.verifying_key();
+    let msg = format!("inference:submit:{model_hash}:{output_hash}");
+    let signature = signing_key.sign(msg.as_bytes());
+
+    serde_json::json!({
+        "oracle_id": "oracle-a",
+        "model_hash": model_hash,
+        "model_version": "v1.0",
+        "input_hash": "b".repeat(64),
+        "output": r#"{"result": 42}"#,
+        "output_hash": output_hash,
+        "signature": hex::encode(signature.to_bytes()),
+        "public_key": hex::encode(public_key.to_bytes()),
+        "proof": proof,
+    })
+}
+
+// ── Valid proof → instant Finalized ──────────────────────────────────────────
+
+#[actix_web::test]
+async fn http_submit_proven_valid_sha256_instant_finalized() {
+    setup_env();
+    let store = Arc::new(MemoryStore::new());
+    let state = make_state_with_staking(store.clone());
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(ApiRoutes::configure),
+    )
+    .await;
+
+    let model_hash = "a".repeat(64);
+    let output_hash = "c".repeat(64);
+    let input_hash = "b".repeat(64);
+    let proof = make_sha256_proof(&model_hash, &input_hash, &output_hash);
+    let body = proven_submit_body(&model_hash, &output_hash, proof);
+
+    let req = test::TestRequest::post()
+        .uri("/api/v1/inference/submit-proven")
+        .set_json(&body)
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 201);
+
+    let result: ApiResponse<serde_json::Value> = test::read_body_json(resp).await;
+    let data = result.data.unwrap();
+    assert_eq!(data["status"], "Finalized");
+    assert_eq!(data["proof_type"], "Sha256Commitment");
+    assert!(data["finalized_at"].is_number());
+
+    // Verify it's in storage as Finalized
+    let claim_id = data["id"].as_str().unwrap();
+    let loaded = store.read_inference_claim(claim_id).unwrap();
+    assert_eq!(loaded.status, ClaimStatus::Finalized);
+    assert!(loaded.finalized_at.is_some());
+}
+
+// ── Invalid proof → rejected ─────────────────────────────────────────────────
+
+#[actix_web::test]
+async fn http_submit_proven_invalid_sha256_rejected() {
+    setup_env();
+    let store = Arc::new(MemoryStore::new());
+    let state = make_state_with_staking(store);
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(ApiRoutes::configure),
+    )
+    .await;
+
+    let model_hash = "a".repeat(64);
+    let output_hash = "c".repeat(64);
+    // Wrong commitment (doesn't match the actual hashes)
+    let bad_proof = serde_json::json!({
+        "proof_type": "Sha256Commitment",
+        "proof_data": "ff".repeat(32),
+    });
+    let body = proven_submit_body(&model_hash, &output_hash, bad_proof);
+
+    let req = test::TestRequest::post()
+        .uri("/api/v1/inference/submit-proven")
+        .set_json(&body)
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+}
+
+// ── Unsupported proof type → error ───────────────────────────────────────────
+
+#[actix_web::test]
+async fn http_submit_proven_unsupported_type_error() {
+    setup_env();
+    let store = Arc::new(MemoryStore::new());
+    let state = make_state_with_staking(store);
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(ApiRoutes::configure),
+    )
+    .await;
+
+    let model_hash = "a".repeat(64);
+    let output_hash = "c".repeat(64);
+    let unsupported_proof = serde_json::json!({
+        "proof_type": "Groth16Bn254",
+        "proof_data": "ff".repeat(32),
+        "verification_key": "vk_hex",
+    });
+    let body = proven_submit_body(&model_hash, &output_hash, unsupported_proof);
+
+    let req = test::TestRequest::post()
+        .uri("/api/v1/inference/submit-proven")
+        .set_json(&body)
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+}
+
+// ── Bad proof hex → error ────────────────────────────────────────────────────
+
+#[actix_web::test]
+async fn http_submit_proven_bad_proof_hex_error() {
+    setup_env();
+    let store = Arc::new(MemoryStore::new());
+    let state = make_state_with_staking(store);
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(ApiRoutes::configure),
+    )
+    .await;
+
+    let model_hash = "a".repeat(64);
+    let output_hash = "c".repeat(64);
+    let bad_hex_proof = serde_json::json!({
+        "proof_type": "Sha256Commitment",
+        "proof_data": "not_valid_hex",
+    });
+    let body = proven_submit_body(&model_hash, &output_hash, bad_hex_proof);
+
+    let req = test::TestRequest::post()
+        .uri("/api/v1/inference/submit-proven")
+        .set_json(&body)
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+}
+
+// ── Unregistered oracle → rejected (same validation as submit) ───────────────
+
+#[actix_web::test]
+async fn http_submit_proven_unregistered_oracle_rejected() {
+    setup_env();
+    let store = Arc::new(MemoryStore::new());
+    let state = make_state(store); // no staking setup
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(ApiRoutes::configure),
+    )
+    .await;
+
+    let model_hash = "a".repeat(64);
+    let output_hash = "c".repeat(64);
+    let input_hash = "b".repeat(64);
+    let proof = make_sha256_proof(&model_hash, &input_hash, &output_hash);
+    let body = proven_submit_body(&model_hash, &output_hash, proof);
+
+    let req = test::TestRequest::post()
+        .uri("/api/v1/inference/submit-proven")
+        .set_json(&body)
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+}

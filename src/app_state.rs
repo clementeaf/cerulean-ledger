@@ -106,6 +106,8 @@ pub struct AppState {
     /// HMAC secret for vault recovery blind indexing (NIST SP 800-185).
     /// Recovery is disabled when this is `None`.
     pub vault_recovery_secret: Option<Vec<u8>>,
+    /// Pluggable proof verifier for zkML inference claims.
+    pub proof_verifier: Arc<dyn crate::inference::proof::ProofVerifier>,
 }
 
 impl AppState {
@@ -170,6 +172,7 @@ impl AppState {
                 crate::transaction::mempool::TransactionPool::new(),
             )),
             vault_recovery_secret: None,
+            proof_verifier: Arc::new(crate::inference::proof::MultiVerifier::new()),
         }
     }
 }

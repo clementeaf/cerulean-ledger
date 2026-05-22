@@ -72,13 +72,14 @@ pub async fn stake(
         });
     }
 
+    // Wallet exists if registered in WalletManager OR has balance in BlockStore
     let wallet_exists = {
         let wm = state
             .wallet_manager
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         wm.get_wallet(&body.address).is_some()
-    };
+    } || balance > 0;
 
     state
         .staking_manager

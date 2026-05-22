@@ -5,8 +5,8 @@ use std::sync::Mutex;
 
 use super::errors::{StorageError, StorageResult};
 use super::traits::{
-    Acta, AliasEntry, Assembly, Block, BlockStore, Credential, IdentityRecord, Invitation, Scope,
-    Session, Transaction,
+    Acta, AliasEntry, Assembly, Block, BlockStore, ClaimStatus, Credential, IdentityRecord,
+    InferenceClaim, Invitation, Scope, Session, Transaction,
 };
 use crate::registry::compliance::{ComplianceResult, ComplianceRule};
 use crate::registry::tokenization::AssetToken;
@@ -47,6 +47,8 @@ pub struct MemoryStore {
     compliance_results: Mutex<HashMap<String, ComplianceResult>>,
     /// Alias registry: commitment → AliasEntry
     aliases: Mutex<HashMap<String, AliasEntry>>,
+    /// Inference claims: claim_id → InferenceClaim
+    inference_claims: Mutex<HashMap<String, InferenceClaim>>,
     /// Invitations: id → Invitation
     invitations: Mutex<HashMap<String, Invitation>>,
 }
@@ -73,6 +75,7 @@ impl MemoryStore {
             compliance_rules: Mutex::new(HashMap::new()),
             compliance_results: Mutex::new(HashMap::new()),
             aliases: Mutex::new(HashMap::new()),
+            inference_claims: Mutex::new(HashMap::new()),
             invitations: Mutex::new(HashMap::new()),
         }
     }
@@ -591,6 +594,42 @@ impl BlockStore for MemoryStore {
     fn delete_alias(&self, commitment: &str) -> StorageResult<()> {
         self.aliases.lock().unwrap().remove(commitment);
         Ok(())
+    }
+
+    // ── Inference Claims ────────────────────────────────────────────────
+
+    fn write_inference_claim(&self, claim: &InferenceClaim) -> StorageResult<()> {
+        self.inference_claims
+            .lock()
+            .unwrap()
+            .insert(claim.id.clone(), claim.clone());
+        Ok(())
+    }
+
+    fn read_inference_claim(&self, id: &str) -> StorageResult<InferenceClaim> {
+        self.inference_claims
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .ok_or_else(|| StorageError::KeyNotFound(format!("inference_claim:{id}")))
+    }
+
+    fn list_inference_claims(
+        &self,
+        status: Option<&ClaimStatus>,
+        oracle_id: Option<&str>,
+        model_hash: Option<&str>,
+    ) -> StorageResult<Vec<InferenceClaim>> {
+        let claims = self.inference_claims.lock().unwrap();
+        let results = claims
+            .values()
+            .filter(|c| status.is_none_or(|s| &c.status == s))
+            .filter(|c| oracle_id.is_none_or(|o| c.oracle_id == o))
+            .filter(|c| model_hash.is_none_or(|m| c.model_hash == m))
+            .cloned()
+            .collect();
+        Ok(results)
     }
 
     // ── Invitations ─────────────────────────────────────────────────────

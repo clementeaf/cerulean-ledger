@@ -261,6 +261,59 @@ pub struct AliasEntry {
     pub revoked_at: Option<u64>,
 }
 
+/// Status of an inference claim in the optimistic oracle.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ClaimStatus {
+    /// Waiting for dispute window to expire.
+    #[default]
+    Pending,
+    /// Dispute window expired with no challenge — result accepted.
+    Finalized,
+    /// A challenge was submitted (Phase 2).
+    Disputed,
+    /// Oracle was slashed after a successful challenge (Phase 2).
+    Slashed,
+    /// Challenge was rejected (Phase 2).
+    Rejected,
+}
+
+/// An inference claim submitted by an oracle in the Optimistic ML Oracle.
+///
+/// The oracle asserts that `model_hash` produced `output` given `input_hash`.
+/// The claim is pending during the dispute window; if unchallenged, it finalizes.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct InferenceClaim {
+    /// Unique claim ID (UUID).
+    pub id: String,
+    /// Oracle that submitted this claim (must be staked).
+    pub oracle_id: String,
+    /// SHA3-256 hash of model weights/ONNX file (64 hex chars).
+    pub model_hash: String,
+    /// Human-readable model version tag.
+    pub model_version: String,
+    /// SHA3-256 hash of the input data (64 hex chars).
+    pub input_hash: String,
+    /// Optional URI where challengers can fetch the input for re-execution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_uri: Option<String>,
+    /// The inference result (JSON-serialized).
+    pub output: String,
+    /// SHA3-256 of the output (for quick comparison).
+    pub output_hash: String,
+    /// Unix timestamp of submission.
+    pub timestamp: u64,
+    /// Ed25519 signature over `"inference:{id}:{model_hash}:{output_hash}"`.
+    pub signature: String,
+    /// Current status.
+    #[serde(default)]
+    pub status: ClaimStatus,
+    /// Unix timestamp after which the claim can be finalized.
+    pub dispute_deadline: u64,
+    /// Unix timestamp when finalized (if applicable).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finalized_at: Option<u64>,
+}
+
 /// An invitation to participate in governance proposals.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Invitation {
@@ -682,6 +735,30 @@ pub trait BlockStore: Send + Sync {
         Ok(result)
     }
 
+    // ── Inference Claims (Optimistic ML Oracle) ──────────────────────────
+
+    /// Store an inference claim keyed by ID.
+    fn write_inference_claim(&self, _claim: &InferenceClaim) -> StorageResult<()> {
+        Ok(())
+    }
+
+    /// Read an inference claim by ID.
+    fn read_inference_claim(&self, _id: &str) -> StorageResult<InferenceClaim> {
+        Err(super::errors::StorageError::KeyNotFound(
+            "inference claim not found".into(),
+        ))
+    }
+
+    /// List inference claims, optionally filtered by status, oracle, or model.
+    fn list_inference_claims(
+        &self,
+        _status: Option<&ClaimStatus>,
+        _oracle_id: Option<&str>,
+        _model_hash: Option<&str>,
+    ) -> StorageResult<Vec<InferenceClaim>> {
+        Ok(vec![])
+    }
+
     /// Return a page of blocks plus the total count for pagination.
     ///
     /// Default implementation iterates `[offset, offset+limit)` by height.
@@ -789,6 +866,20 @@ impl<T: BlockStore> BlockStore for Arc<T> {
     }
     fn cleanup_seen_txs(&self, max_age_secs: u64) -> StorageResult<u64> {
         (**self).cleanup_seen_txs(max_age_secs)
+    }
+    fn write_inference_claim(&self, claim: &InferenceClaim) -> StorageResult<()> {
+        (**self).write_inference_claim(claim)
+    }
+    fn read_inference_claim(&self, id: &str) -> StorageResult<InferenceClaim> {
+        (**self).read_inference_claim(id)
+    }
+    fn list_inference_claims(
+        &self,
+        status: Option<&ClaimStatus>,
+        oracle_id: Option<&str>,
+        model_hash: Option<&str>,
+    ) -> StorageResult<Vec<InferenceClaim>> {
+        (**self).list_inference_claims(status, oracle_id, model_hash)
     }
 }
 

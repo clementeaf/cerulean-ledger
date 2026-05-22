@@ -20,6 +20,7 @@ pub mod gateway;
 pub mod governance;
 pub mod governance_entities;
 pub mod identity;
+pub mod inference;
 pub mod intelligence;
 pub mod interop;
 pub mod invitations;

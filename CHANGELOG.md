@@ -8,6 +8,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) · Versioning: 
 
 ### 2026-05-22
 
+**Optimistic ML Oracle — Phase 1 (MVP)**
+
+- `POST /api/v1/inference/submit` — submit inference claim (staked oracle, Ed25519 signed)
+- `POST /api/v1/inference/finalize/{id}` — finalize claim after dispute window (permissionless)
+- `GET /api/v1/inference/claims` — list claims (filter by status, oracle, model)
+- `GET /api/v1/inference/claims/{id}` — get claim details
+- `GET /api/v1/inference/models` — list known models with claim counts
+- `InferenceClaim` type with `ClaimStatus` enum (Pending → Finalized)
+- Storage: `inference_claims` column family (RocksDB) with `oracle:` and `model:` secondary indices
+- Signing payload: `"inference:submit:{model_hash}:{output_hash}"`
+- Config: `INFERENCE_DISPUTE_WINDOW_SECS` (default 24h), `INFERENCE_MIN_ORACLE_STAKE` (default 5000)
+
 **Context-prefixed signing payloads for alias endpoints**
 
 - Register signs `"alias:register:{commitment}"`, revoke signs `"alias:revoke:{commitment}"`

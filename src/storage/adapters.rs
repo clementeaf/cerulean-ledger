@@ -81,6 +81,7 @@ const CF_ASSET_TOKENS: &str = "asset_tokens";
 const CF_COMPLIANCE_RULES: &str = "compliance_rules";
 const CF_COMPLIANCE_RESULTS: &str = "compliance_results";
 const CF_ALIASES: &str = "aliases";
+const CF_INFERENCE_CLAIMS: &str = "inference_claims";
 const CF_INVITATIONS: &str = "invitations";
 
 const META_LATEST_HEIGHT: &[u8] = b"latest_height";
@@ -120,6 +121,7 @@ const ALL_CFS: &[&str] = &[
     CF_COMPLIANCE_RULES,
     CF_COMPLIANCE_RESULTS,
     CF_ALIASES,
+    CF_INFERENCE_CLAIMS,
     CF_INVITATIONS,
 ];
 
@@ -1432,6 +1434,75 @@ impl BlockStore for RocksDbBlockStore {
         self.db
             .delete_cf(&cf, commitment.as_bytes())
             .map_err(|e| StorageError::RocksDbError(e.to_string()))
+    }
+
+    // ── Inference Claims ────────────────────────────────────────────────
+
+    fn write_inference_claim(&self, claim: &super::traits::InferenceClaim) -> StorageResult<()> {
+        let cf = self
+            .db
+            .cf_handle(CF_INFERENCE_CLAIMS)
+            .ok_or_else(|| StorageError::RocksDbError("missing inference_claims CF".into()))?;
+        let json = serde_json::to_vec(claim)
+            .map_err(|e| StorageError::SerializationError(e.to_string()))?;
+        self.db
+            .put_cf(&cf, claim.id.as_bytes(), &json)
+            .map_err(|e| StorageError::RocksDbError(e.to_string()))?;
+        // Secondary index: oracle:{oracle_id}:{claim_id} → claim_id
+        let oracle_key = format!("oracle:{}:{}", claim.oracle_id, claim.id);
+        self.db
+            .put_cf(&cf, oracle_key.as_bytes(), claim.id.as_bytes())
+            .map_err(|e| StorageError::RocksDbError(e.to_string()))?;
+        // Secondary index: model:{model_hash}:{claim_id} → claim_id
+        let model_key = format!("model:{}:{}", claim.model_hash, claim.id);
+        self.db
+            .put_cf(&cf, model_key.as_bytes(), claim.id.as_bytes())
+            .map_err(|e| StorageError::RocksDbError(e.to_string()))?;
+        Ok(())
+    }
+
+    fn read_inference_claim(&self, id: &str) -> StorageResult<super::traits::InferenceClaim> {
+        let cf = self
+            .db
+            .cf_handle(CF_INFERENCE_CLAIMS)
+            .ok_or_else(|| StorageError::RocksDbError("missing inference_claims CF".into()))?;
+        let data = self
+            .db
+            .get_cf(&cf, id.as_bytes())
+            .map_err(|e| StorageError::RocksDbError(e.to_string()))?
+            .ok_or_else(|| StorageError::KeyNotFound(format!("inference_claim:{id}")))?;
+        serde_json::from_slice(&data).map_err(|e| StorageError::DeserializationError(e.to_string()))
+    }
+
+    fn list_inference_claims(
+        &self,
+        status: Option<&super::traits::ClaimStatus>,
+        oracle_id: Option<&str>,
+        model_hash: Option<&str>,
+    ) -> StorageResult<Vec<super::traits::InferenceClaim>> {
+        let cf = self
+            .db
+            .cf_handle(CF_INFERENCE_CLAIMS)
+            .ok_or_else(|| StorageError::RocksDbError("missing inference_claims CF".into()))?;
+        let iter = self.db.iterator_cf(&cf, rocksdb::IteratorMode::Start);
+        let mut results = Vec::new();
+        for item in iter {
+            let (key, value) = item.map_err(|e| StorageError::RocksDbError(e.to_string()))?;
+            // Skip secondary index keys (they start with "oracle:" or "model:")
+            let key_str = String::from_utf8_lossy(&key);
+            if key_str.starts_with("oracle:") || key_str.starts_with("model:") {
+                continue;
+            }
+            let claim: super::traits::InferenceClaim = serde_json::from_slice(&value)
+                .map_err(|e| StorageError::DeserializationError(e.to_string()))?;
+            if status.is_none_or(|s| &claim.status == s)
+                && oracle_id.is_none_or(|o| claim.oracle_id == o)
+                && model_hash.is_none_or(|m| claim.model_hash == m)
+            {
+                results.push(claim);
+            }
+        }
+        Ok(results)
     }
 
     // ── Invitations ─────────────────────────────────────────────────────

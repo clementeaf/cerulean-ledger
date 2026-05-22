@@ -8,6 +8,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) · Versioning: 
 
 ### 2026-05-22
 
+**Optimistic ML Oracle — Phase 2 (Disputes)**
+
+- `POST /api/v1/inference/challenge` — challenge a pending claim with re-executed output
+- Resolution: outputs match → challenge rejected (oracle correct); outputs differ → oracle slashed
+- Challenger must be staked (bond), cannot self-challenge, must be within dispute window
+- Oracle reputation updated: double penalty on slash, reward on rejected challenge
+- `InferenceChallenge` type with `succeeded` field
+- Signing payload: `"challenge:{claim_id}:{challenger_output_hash}"`
+- Config: `INFERENCE_CHALLENGE_BOND` (default 1000)
+
 **Optimistic ML Oracle — Phase 1 (MVP)**
 
 - `POST /api/v1/inference/submit` — submit inference claim (staked oracle, Ed25519 signed)

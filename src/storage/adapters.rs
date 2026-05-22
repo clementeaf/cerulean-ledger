@@ -1505,6 +1505,61 @@ impl BlockStore for RocksDbBlockStore {
         Ok(results)
     }
 
+    fn write_inference_challenge(
+        &self,
+        challenge: &super::traits::InferenceChallenge,
+    ) -> StorageResult<()> {
+        let cf = self
+            .db
+            .cf_handle(CF_INFERENCE_CLAIMS)
+            .ok_or_else(|| StorageError::RocksDbError("missing inference_claims CF".into()))?;
+        let key = format!("challenge:{}", challenge.id);
+        let json = serde_json::to_vec(challenge)
+            .map_err(|e| StorageError::SerializationError(e.to_string()))?;
+        self.db
+            .put_cf(&cf, key.as_bytes(), &json)
+            .map_err(|e| StorageError::RocksDbError(e.to_string()))?;
+        // Secondary: claim_challenge:{claim_id}:{challenge_id} → challenge_id
+        let claim_key = format!("claim_challenge:{}:{}", challenge.claim_id, challenge.id);
+        self.db
+            .put_cf(&cf, claim_key.as_bytes(), challenge.id.as_bytes())
+            .map_err(|e| StorageError::RocksDbError(e.to_string()))?;
+        Ok(())
+    }
+
+    fn list_challenges_by_claim(
+        &self,
+        claim_id: &str,
+    ) -> StorageResult<Vec<super::traits::InferenceChallenge>> {
+        let cf = self
+            .db
+            .cf_handle(CF_INFERENCE_CLAIMS)
+            .ok_or_else(|| StorageError::RocksDbError("missing inference_claims CF".into()))?;
+        let prefix = format!("claim_challenge:{claim_id}:");
+        let iter = self.db.prefix_iterator_cf(&cf, prefix.as_bytes());
+        let mut results = Vec::new();
+        for item in iter {
+            let (key, value) = item.map_err(|e| StorageError::RocksDbError(e.to_string()))?;
+            let key_str = String::from_utf8_lossy(&key);
+            if !key_str.starts_with(&prefix) {
+                break;
+            }
+            let challenge_id = String::from_utf8(value.to_vec())
+                .map_err(|e| StorageError::DeserializationError(e.to_string()))?;
+            let ch_key = format!("challenge:{challenge_id}");
+            if let Some(data) = self
+                .db
+                .get_cf(&cf, ch_key.as_bytes())
+                .map_err(|e| StorageError::RocksDbError(e.to_string()))?
+            {
+                let challenge: super::traits::InferenceChallenge = serde_json::from_slice(&data)
+                    .map_err(|e| StorageError::DeserializationError(e.to_string()))?;
+                results.push(challenge);
+            }
+        }
+        Ok(results)
+    }
+
     // ── Invitations ─────────────────────────────────────────────────────
 
     fn write_invitation(&self, invitation: &super::traits::Invitation) -> StorageResult<()> {

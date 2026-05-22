@@ -314,6 +314,33 @@ pub struct InferenceClaim {
     pub finalized_at: Option<u64>,
 }
 
+/// A challenge against a pending inference claim.
+///
+/// The challenger re-executes the model and submits a different output.
+/// If the outputs differ, the oracle is slashed and the challenger is rewarded.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct InferenceChallenge {
+    /// Unique challenge ID (UUID).
+    pub id: String,
+    /// ID of the claim being challenged.
+    pub claim_id: String,
+    /// Challenger's address (must be staked).
+    pub challenger_id: String,
+    /// Re-executed output (JSON-serialized).
+    pub challenger_output: String,
+    /// SHA3-256 of the challenger's output.
+    pub challenger_output_hash: String,
+    /// Bond locked by the challenger (anti-spam).
+    pub bond: u64,
+    /// Unix timestamp.
+    pub timestamp: u64,
+    /// Ed25519 signature over `"challenge:{claim_id}:{challenger_output_hash}"`.
+    pub signature: String,
+    /// Whether the challenge succeeded (oracle output differs from challenger output).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub succeeded: Option<bool>,
+}
+
 /// An invitation to participate in governance proposals.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Invitation {
@@ -759,6 +786,16 @@ pub trait BlockStore: Send + Sync {
         Ok(vec![])
     }
 
+    /// Store an inference challenge.
+    fn write_inference_challenge(&self, _challenge: &InferenceChallenge) -> StorageResult<()> {
+        Ok(())
+    }
+
+    /// List challenges for a given claim.
+    fn list_challenges_by_claim(&self, _claim_id: &str) -> StorageResult<Vec<InferenceChallenge>> {
+        Ok(vec![])
+    }
+
     /// Return a page of blocks plus the total count for pagination.
     ///
     /// Default implementation iterates `[offset, offset+limit)` by height.
@@ -880,6 +917,12 @@ impl<T: BlockStore> BlockStore for Arc<T> {
         model_hash: Option<&str>,
     ) -> StorageResult<Vec<InferenceClaim>> {
         (**self).list_inference_claims(status, oracle_id, model_hash)
+    }
+    fn write_inference_challenge(&self, challenge: &InferenceChallenge) -> StorageResult<()> {
+        (**self).write_inference_challenge(challenge)
+    }
+    fn list_challenges_by_claim(&self, claim_id: &str) -> StorageResult<Vec<InferenceChallenge>> {
+        (**self).list_challenges_by_claim(claim_id)
     }
 }
 

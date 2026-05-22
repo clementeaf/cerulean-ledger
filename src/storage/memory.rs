@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use super::errors::{StorageError, StorageResult};
 use super::traits::{
     Acta, AliasEntry, Assembly, Block, BlockStore, ClaimStatus, Credential, IdentityRecord,
-    InferenceClaim, Invitation, Scope, Session, Transaction,
+    InferenceChallenge, InferenceClaim, Invitation, Scope, Session, Transaction,
 };
 use crate::registry::compliance::{ComplianceResult, ComplianceRule};
 use crate::registry::tokenization::AssetToken;
@@ -49,6 +49,8 @@ pub struct MemoryStore {
     aliases: Mutex<HashMap<String, AliasEntry>>,
     /// Inference claims: claim_id → InferenceClaim
     inference_claims: Mutex<HashMap<String, InferenceClaim>>,
+    /// Inference challenges: challenge_id → InferenceChallenge
+    inference_challenges: Mutex<HashMap<String, InferenceChallenge>>,
     /// Invitations: id → Invitation
     invitations: Mutex<HashMap<String, Invitation>>,
 }
@@ -76,6 +78,7 @@ impl MemoryStore {
             compliance_results: Mutex::new(HashMap::new()),
             aliases: Mutex::new(HashMap::new()),
             inference_claims: Mutex::new(HashMap::new()),
+            inference_challenges: Mutex::new(HashMap::new()),
             invitations: Mutex::new(HashMap::new()),
         }
     }
@@ -627,6 +630,24 @@ impl BlockStore for MemoryStore {
             .filter(|c| status.is_none_or(|s| &c.status == s))
             .filter(|c| oracle_id.is_none_or(|o| c.oracle_id == o))
             .filter(|c| model_hash.is_none_or(|m| c.model_hash == m))
+            .cloned()
+            .collect();
+        Ok(results)
+    }
+
+    fn write_inference_challenge(&self, challenge: &InferenceChallenge) -> StorageResult<()> {
+        self.inference_challenges
+            .lock()
+            .unwrap()
+            .insert(challenge.id.clone(), challenge.clone());
+        Ok(())
+    }
+
+    fn list_challenges_by_claim(&self, claim_id: &str) -> StorageResult<Vec<InferenceChallenge>> {
+        let challenges = self.inference_challenges.lock().unwrap();
+        let results = challenges
+            .values()
+            .filter(|c| c.claim_id == claim_id)
             .cloned()
             .collect();
         Ok(results)

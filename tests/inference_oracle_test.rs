@@ -13,7 +13,7 @@ use actix_web::{test, web, App};
 use rust_bc::{
     api::{errors::ApiResponse, routes::ApiRoutes},
     storage::{
-        traits::{ClaimStatus, InferenceClaim},
+        traits::{ClaimStatus, InferenceChallenge, InferenceClaim},
         BlockStore, MemoryStore,
     },
     AppState,
@@ -492,4 +492,317 @@ async fn claim_status_serde_all_variants() {
         let decoded: ClaimStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, status);
     }
+}
+
+// ── Phase 2: Challenge Tests ─────────────────────────────────────────────────
+
+fn make_state_with_staking(store: Arc<MemoryStore>) -> AppState {
+    let mut state = make_state(store);
+    // Register oracle and challenger as staked validators
+    state
+        .staking_manager
+        .stake("oracle-a", 10_000, true)
+        .unwrap();
+    state
+        .staking_manager
+        .stake("challenger-1", 5_000, true)
+        .unwrap();
+    // Register oracle in oracle registry
+    {
+        let mut registry = state.oracle_registry.lock().unwrap();
+        registry.register_oracle("oracle-a".to_string()).unwrap();
+    }
+    state
+}
+
+/// Generate a real Ed25519 signed challenge body.
+fn challenge_body(claim_id: &str, output_hash: &str) -> serde_json::Value {
+    use pqc_crypto_module::legacy::ed25519::{Signer, SigningKey};
+    use rand::rngs::OsRng;
+
+    let signing_key = SigningKey::generate(&mut OsRng);
+    let public_key = signing_key.verifying_key();
+    let msg = format!("challenge:{claim_id}:{output_hash}");
+    let signature = signing_key.sign(msg.as_bytes());
+
+    serde_json::json!({
+        "claim_id": claim_id,
+        "challenger_id": "challenger-1",
+        "challenger_output": r#"{"result": 99}"#,
+        "challenger_output_hash": output_hash,
+        "signature": hex::encode(signature.to_bytes()),
+        "public_key": hex::encode(public_key.to_bytes()),
+    })
+}
+
+// ── Storage: challenge write/read ────────────────────────────────────────────
+
+#[actix_web::test]
+async fn storage_write_and_list_challenges() {
+    let store = MemoryStore::new();
+    let ch = InferenceChallenge {
+        id: "ch-1".to_string(),
+        claim_id: "claim-1".to_string(),
+        challenger_id: "challenger-1".to_string(),
+        challenger_output: "{}".to_string(),
+        challenger_output_hash: "f".repeat(64),
+        bond: 1000,
+        timestamp: now_secs(),
+        signature: "sig".to_string(),
+        succeeded: Some(true),
+    };
+    store.write_inference_challenge(&ch).unwrap();
+
+    let challenges = store.list_challenges_by_claim("claim-1").unwrap();
+    assert_eq!(challenges.len(), 1);
+    assert_eq!(challenges[0].id, "ch-1");
+    assert_eq!(challenges[0].succeeded, Some(true));
+
+    // Different claim returns empty
+    let empty = store.list_challenges_by_claim("claim-999").unwrap();
+    assert!(empty.is_empty());
+}
+
+// ── HTTP: challenge non-pending claim ────────────────────────────────────────
+
+#[actix_web::test]
+async fn http_challenge_finalized_claim_rejected() {
+    setup_env();
+    let store = Arc::new(MemoryStore::new());
+    let mut claim = sample_claim("fc-1", "oracle-a", "m1", ClaimStatus::Finalized);
+    claim.finalized_at = Some(now_secs());
+    store.write_inference_claim(&claim).unwrap();
+
+    let state = make_state_with_staking(store);
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(ApiRoutes::configure),
+    )
+    .await;
+
+    let body = challenge_body("fc-1", &"f".repeat(64));
+    let req = test::TestRequest::post()
+        .uri("/api/v1/inference/challenge")
+        .set_json(&body)
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 409);
+}
+
+// ── HTTP: challenge after dispute window ─────────────────────────────────────
+
+#[actix_web::test]
+async fn http_challenge_after_deadline_rejected() {
+    setup_env();
+    let store = Arc::new(MemoryStore::new());
+    let mut claim = sample_claim("exp-1", "oracle-a", "m1", ClaimStatus::Pending);
+    claim.dispute_deadline = now_secs() - 1; // Already expired
+    store.write_inference_claim(&claim).unwrap();
+
+    let state = make_state_with_staking(store);
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(ApiRoutes::configure),
+    )
+    .await;
+
+    let body = challenge_body("exp-1", &"f".repeat(64));
+    let req = test::TestRequest::post()
+        .uri("/api/v1/inference/challenge")
+        .set_json(&body)
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+}
+
+// ── HTTP: self-challenge blocked ─────────────────────────────────────────────
+
+#[actix_web::test]
+async fn http_self_challenge_blocked() {
+    setup_env();
+    let store = Arc::new(MemoryStore::new());
+    let claim = sample_claim("sc-1", "oracle-a", "m1", ClaimStatus::Pending);
+    store.write_inference_claim(&claim).unwrap();
+
+    let state = make_state_with_staking(store);
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(ApiRoutes::configure),
+    )
+    .await;
+
+    // Challenger = oracle-a (same as claim oracle)
+    let body = serde_json::json!({
+        "claim_id": "sc-1",
+        "challenger_id": "oracle-a",
+        "challenger_output": "{}",
+        "challenger_output_hash": "f".repeat(64),
+        "signature": "d".repeat(128),
+        "public_key": "e".repeat(64),
+    });
+    let req = test::TestRequest::post()
+        .uri("/api/v1/inference/challenge")
+        .set_json(&body)
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+}
+
+// ── HTTP: challenger not staked ──────────────────────────────────────────────
+
+#[actix_web::test]
+async fn http_challenge_unstaked_challenger_rejected() {
+    setup_env();
+    let store = Arc::new(MemoryStore::new());
+    let claim = sample_claim("us-1", "oracle-a", "m1", ClaimStatus::Pending);
+    store.write_inference_claim(&claim).unwrap();
+
+    let state = make_state_with_staking(store);
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(ApiRoutes::configure),
+    )
+    .await;
+
+    let body = serde_json::json!({
+        "claim_id": "us-1",
+        "challenger_id": "nobody",
+        "challenger_output": "{}",
+        "challenger_output_hash": "f".repeat(64),
+        "signature": "d".repeat(128),
+        "public_key": "e".repeat(64),
+    });
+    let req = test::TestRequest::post()
+        .uri("/api/v1/inference/challenge")
+        .set_json(&body)
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+}
+
+// ── HTTP: successful challenge (outputs differ → slash) ──────────────────────
+
+#[actix_web::test]
+async fn http_challenge_succeeds_slash_oracle() {
+    setup_env();
+    let store = Arc::new(MemoryStore::new());
+    let claim = sample_claim("sl-1", "oracle-a", "m1", ClaimStatus::Pending);
+    // claim.output_hash = "c".repeat(64)
+    store.write_inference_claim(&claim).unwrap();
+
+    let state = make_state_with_staking(store.clone());
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(ApiRoutes::configure),
+    )
+    .await;
+
+    // Challenger submits DIFFERENT output hash → challenge succeeds
+    let body = challenge_body("sl-1", &"f".repeat(64));
+    let req = test::TestRequest::post()
+        .uri("/api/v1/inference/challenge")
+        .set_json(&body)
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let result: ApiResponse<serde_json::Value> = test::read_body_json(resp).await;
+    let data = result.data.unwrap();
+    assert_eq!(data["succeeded"], true);
+    assert_eq!(data["claim_status"], "Slashed");
+
+    // Verify claim status in storage
+    let loaded = store.read_inference_claim("sl-1").unwrap();
+    assert_eq!(loaded.status, ClaimStatus::Slashed);
+
+    // Verify challenge was stored
+    let challenges = store.list_challenges_by_claim("sl-1").unwrap();
+    assert_eq!(challenges.len(), 1);
+    assert_eq!(challenges[0].succeeded, Some(true));
+}
+
+// ── HTTP: failed challenge (outputs match → reject) ──────────────────────────
+
+#[actix_web::test]
+async fn http_challenge_fails_same_output() {
+    setup_env();
+    let store = Arc::new(MemoryStore::new());
+    let claim = sample_claim("rj-1", "oracle-a", "m1", ClaimStatus::Pending);
+    // claim.output_hash = "c".repeat(64)
+    store.write_inference_claim(&claim).unwrap();
+
+    let state = make_state_with_staking(store.clone());
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(ApiRoutes::configure),
+    )
+    .await;
+
+    // Challenger submits SAME output hash → challenge fails
+    let body = challenge_body("rj-1", &"c".repeat(64));
+    let req = test::TestRequest::post()
+        .uri("/api/v1/inference/challenge")
+        .set_json(&body)
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let result: ApiResponse<serde_json::Value> = test::read_body_json(resp).await;
+    let data = result.data.unwrap();
+    assert_eq!(data["succeeded"], false);
+    assert_eq!(data["claim_status"], "Rejected");
+
+    // Verify claim status
+    let loaded = store.read_inference_claim("rj-1").unwrap();
+    assert_eq!(loaded.status, ClaimStatus::Rejected);
+}
+
+// ── HTTP: challenge nonexistent claim ────────────────────────────────────────
+
+#[actix_web::test]
+async fn http_challenge_nonexistent_claim() {
+    setup_env();
+    let store = Arc::new(MemoryStore::new());
+    let state = make_state_with_staking(store);
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(ApiRoutes::configure),
+    )
+    .await;
+
+    let body = challenge_body("nope", &"f".repeat(64));
+    let req = test::TestRequest::post()
+        .uri("/api/v1/inference/challenge")
+        .set_json(&body)
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+}
+
+// ── InferenceChallenge serde ─────────────────────────────────────────────────
+
+#[actix_web::test]
+async fn inference_challenge_serde_roundtrip() {
+    let ch = InferenceChallenge {
+        id: "ch-rt".to_string(),
+        claim_id: "claim-rt".to_string(),
+        challenger_id: "ch-id".to_string(),
+        challenger_output: "{}".to_string(),
+        challenger_output_hash: "f".repeat(64),
+        bond: 1000,
+        timestamp: now_secs(),
+        signature: "sig".to_string(),
+        succeeded: Some(false),
+    };
+    let json = serde_json::to_string(&ch).unwrap();
+    let decoded: InferenceChallenge = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded.id, "ch-rt");
+    assert_eq!(decoded.succeeded, Some(false));
 }

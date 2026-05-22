@@ -12,7 +12,7 @@ use crate::api::errors::{ApiResponse, ApiResult, ErrorDto};
 use crate::api::handlers::channels::{channel_id_from_req, get_channel_store};
 use crate::app_state::AppState;
 use crate::storage::traits::AliasEntry;
-use actix_web::{post, web, HttpRequest, HttpResponse};
+use actix_web::{get, post, web, HttpRequest, HttpResponse};
 use serde::Deserialize;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -226,6 +226,37 @@ pub async fn alias_resolve(
         )),
         _ => Ok(HttpResponse::NotFound().json(ApiResponse::<()>::error(
             err_dto("NOT_FOUND", "alias not found"),
+            404,
+        ))),
+    }
+}
+
+/// GET /api/v1/alias/by-did/{did}
+#[get("/alias/by-did/{did}")]
+pub async fn alias_by_did(
+    state: web::Data<AppState>,
+    did: web::Path<String>,
+    req: HttpRequest,
+) -> ApiResult<HttpResponse> {
+    let trace = uuid::Uuid::new_v4().to_string();
+    let channel = channel_id_from_req(&req);
+    let store = get_channel_store(&state, channel)?;
+
+    match store.read_alias_by_did(&did) {
+        Ok(entry) if entry.status == "active" => Ok(HttpResponse::Ok().json(ApiResponse::success(
+            serde_json::json!({
+                "commitment": entry.commitment,
+                "did": entry.did,
+                "encrypted_alias": entry.encrypted_alias,
+                "registered_at": entry.registered_at,
+            }),
+            trace,
+        ))),
+        Ok(entry) if entry.status == "revoked" => Ok(HttpResponse::Gone().json(
+            ApiResponse::<()>::error(err_dto("ALIAS_REVOKED", "this alias has been revoked"), 410),
+        )),
+        _ => Ok(HttpResponse::NotFound().json(ApiResponse::<()>::error(
+            err_dto("NOT_FOUND", "no alias found for this DID"),
             404,
         ))),
     }

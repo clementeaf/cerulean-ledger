@@ -6,6 +6,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) · Versioning: 
 
 ## [Unreleased]
 
+### 2026-05-22
+
+**Alias reverse lookup by DID**
+
+- `GET /alias/by-did/{did}` — resolve a DID to its active alias (commitment, encrypted alias, registration date)
+- Returns 404 if no alias exists, 410 if revoked
+- Uses existing `read_alias_by_did()` storage method (RocksDB `did:` secondary index)
+
+---
+
 ### 2026-05-21
 
 **Alias registry — zero-knowledge alias system**

@@ -202,7 +202,6 @@ mod tests {
 
     #[test]
     fn blind_index_is_deterministic() {
-
         let a = blind_index(b"secret", b"recovery").unwrap();
         let b = blind_index(b"secret", b"recovery").unwrap();
         assert_eq!(a, b);
@@ -211,7 +210,6 @@ mod tests {
 
     #[test]
     fn blind_index_different_secrets_differ() {
-
         let a = blind_index(b"secret1", b"recovery").unwrap();
         let b = blind_index(b"secret2", b"recovery").unwrap();
         assert_ne!(a, b);

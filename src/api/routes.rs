@@ -216,6 +216,7 @@ impl ApiRoutes {
         // Alias registry (zero-knowledge alias system)
         cfg.service(alias::alias_register)
             .service(alias::alias_resolve)
+            .service(alias::alias_by_did)
             .service(alias::alias_revoke);
         // Invitations (governance proposal invitations via alias)
         cfg.service(invitations::create_invitation)

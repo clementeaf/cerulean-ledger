@@ -1,8 +1,10 @@
 [target.x86_64-unknown-linux-gnu]
 image = "ghcr.io/cross-rs/x86_64-unknown-linux-gnu:main"
 pre-build = [
-    "apt-get update && apt-get install -y cmake clang llvm-dev libclang-dev libssl-dev pkg-config perl protobuf-compiler"
+    "apt-get update && apt-get install -y cmake clang llvm-dev libclang-dev libssl-dev pkg-config perl protobuf-compiler",
+    "curl -sSL https://github.com/mozilla/sccache/releases/download/v0.9.1/sccache-v0.9.1-x86_64-unknown-linux-musl.tar.gz | tar xz -C /usr/local/bin --strip-components=1 sccache-v0.9.1-x86_64-unknown-linux-musl/sccache",
 ]
 
 [target.x86_64-unknown-linux-gnu.env]
-passthrough = ["AWS_LC_SYS_CMAKE_BUILDER", "OPENSSL_STATIC"]
+passthrough = ["AWS_LC_SYS_CMAKE_BUILDER", "OPENSSL_STATIC", "RUSTC_WRAPPER", "SCCACHE_DIR"]
+volumes = ["SCCACHE_DIR"]

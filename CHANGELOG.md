@@ -8,6 +8,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) · Versioning: 
 
 ### 2026-05-22
 
+**Context-prefixed signing payloads for alias endpoints**
+
+- Register signs `"alias:register:{commitment}"`, revoke signs `"alias:revoke:{commitment}"`
+- Prevents cross-endpoint replay (previously both signed the raw commitment)
+- **Breaking:** wallets must update their signing payload format
+
+**Fast deploy pipeline**
+
+- `scripts/deploy.sh` — single command: cross-compile → scp → docker rebuild on EC2
+- sccache integrated in `Cross.toml` for cached cross-compilation (~6s incremental vs ~12min cold)
+- Docker build now uses layer cache (no `--no-cache`), rebuilds in ~1s
+
 **Alias reverse lookup by DID**
 
 - `GET /alias/by-did/{did}` — resolve a DID to its active alias (commitment, encrypted alias, registration date)

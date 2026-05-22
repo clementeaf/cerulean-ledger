@@ -4,10 +4,10 @@
 //!   GET  /api/v1/oracle/nodes            — list registered oracle nodes
 //!   GET  /api/v1/oracle/status           — oracle subsystem health
 
-use actix_web::{get, web, HttpResponse};
-use serde::Serialize;
+use actix_web::{get, post, web, HttpRequest, HttpResponse};
+use serde::{Deserialize, Serialize};
 
-use crate::api::errors::{ApiResponse, ApiResult, ErrorDto};
+use crate::api::errors::{enforce_acl, ApiResponse, ApiResult, ErrorDto};
 use crate::app_state::AppState;
 
 /// Price data enriched with staleness metadata.
@@ -134,6 +134,46 @@ pub async fn oracle_status(state: web::Data<AppState>) -> ApiResult<HttpResponse
     };
 
     Ok(HttpResponse::Ok().json(ApiResponse::success(status, trace)))
+}
+
+#[derive(Deserialize)]
+pub struct RegisterOracleRequest {
+    pub address: String,
+}
+
+/// POST /api/v1/oracle/register — register a new oracle node.
+#[post("/oracle/register")]
+pub async fn register_oracle(
+    state: web::Data<AppState>,
+    body: web::Json<RegisterOracleRequest>,
+    req: HttpRequest,
+) -> ApiResult<HttpResponse> {
+    enforce_acl(
+        state.acl_provider.as_deref(),
+        state.policy_store.as_deref(),
+        "peer/Propose",
+        &req,
+    )?;
+    let trace = uuid::Uuid::new_v4().to_string();
+    let mut registry = state
+        .oracle_registry
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    match registry.register_oracle(body.address.clone()) {
+        Ok(()) => Ok(HttpResponse::Created().json(ApiResponse::success(
+            serde_json::json!({ "address": body.address, "registered": true }),
+            trace,
+        ))),
+        Err(e) => Ok(HttpResponse::Conflict().json(ApiResponse::<()>::error(
+            ErrorDto {
+                code: "ORACLE_EXISTS".into(),
+                message: e,
+                field: None,
+            },
+            409,
+        ))),
+    }
 }
 
 #[cfg(test)]

@@ -277,11 +277,28 @@ pub enum ClaimStatus {
     Rejected,
 }
 
+/// Tolerance mode for comparing inference outputs during dispute resolution.
+///
+/// Deterministic models use `Exact` (hash comparison). Non-deterministic models
+/// (temperature > 0) use `Numeric` or `Cosine` to allow acceptable variation.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum OutputTolerance {
+    /// Outputs must have identical hashes.
+    #[default]
+    Exact,
+    /// Numeric outputs must be within `threshold` of each other (absolute difference).
+    Numeric { threshold: f64 },
+    /// Vector outputs must have cosine similarity ≥ `min_similarity` (0.0–1.0).
+    Cosine { min_similarity: f64 },
+}
+
+impl Eq for OutputTolerance {}
+
 /// An inference claim submitted by an oracle in the Optimistic ML Oracle.
 ///
 /// The oracle asserts that `model_hash` produced `output` given `input_hash`.
 /// The claim is pending during the dispute window; if unchallenged, it finalizes.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct InferenceClaim {
     /// Unique claim ID (UUID).
     pub id: String,
@@ -307,6 +324,9 @@ pub struct InferenceClaim {
     /// Current status.
     #[serde(default)]
     pub status: ClaimStatus,
+    /// Tolerance mode for output comparison during challenges.
+    #[serde(default)]
+    pub tolerance: OutputTolerance,
     /// Unix timestamp after which the claim can be finalized.
     pub dispute_deadline: u64,
     /// Unix timestamp when finalized (if applicable).

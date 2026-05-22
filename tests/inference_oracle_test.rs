@@ -13,7 +13,7 @@ use actix_web::{test, web, App};
 use rust_bc::{
     api::{errors::ApiResponse, routes::ApiRoutes},
     storage::{
-        traits::{ClaimStatus, InferenceChallenge, InferenceClaim},
+        traits::{ClaimStatus, InferenceChallenge, InferenceClaim, OutputTolerance},
         BlockStore, MemoryStore,
     },
     AppState,
@@ -48,6 +48,7 @@ fn sample_claim(id: &str, oracle: &str, _model: &str, status: ClaimStatus) -> In
         timestamp: now_secs(),
         signature: "d".repeat(128),
         status,
+        tolerance: OutputTolerance::Exact,
         dispute_deadline: now_secs() + 86400,
         finalized_at: None,
     }
@@ -805,4 +806,313 @@ async fn inference_challenge_serde_roundtrip() {
     let decoded: InferenceChallenge = serde_json::from_str(&json).unwrap();
     assert_eq!(decoded.id, "ch-rt");
     assert_eq!(decoded.succeeded, Some(false));
+}
+
+// ── Phase 3: Tolerance Tests ─────────────────────────────────────────────────
+
+// Helper: create a claim with specific tolerance and output
+fn claim_with_tolerance(
+    id: &str,
+    output: &str,
+    output_hash: &str,
+    tolerance: OutputTolerance,
+) -> InferenceClaim {
+    InferenceClaim {
+        id: id.to_string(),
+        oracle_id: "oracle-a".to_string(),
+        model_hash: "a".repeat(64),
+        model_version: "v1.0".to_string(),
+        input_hash: "b".repeat(64),
+        input_uri: None,
+        output: output.to_string(),
+        output_hash: output_hash.to_string(),
+        timestamp: now_secs(),
+        signature: "d".repeat(128),
+        status: ClaimStatus::Pending,
+        tolerance,
+        dispute_deadline: now_secs() + 86400,
+        finalized_at: None,
+    }
+}
+
+fn challenge_body_with_output(
+    claim_id: &str,
+    output_hash: &str,
+    challenger_output: &str,
+) -> serde_json::Value {
+    use pqc_crypto_module::legacy::ed25519::{Signer, SigningKey};
+    use rand::rngs::OsRng;
+
+    let signing_key = SigningKey::generate(&mut OsRng);
+    let public_key = signing_key.verifying_key();
+    let msg = format!("challenge:{claim_id}:{output_hash}");
+    let signature = signing_key.sign(msg.as_bytes());
+
+    serde_json::json!({
+        "claim_id": claim_id,
+        "challenger_id": "challenger-1",
+        "challenger_output": challenger_output,
+        "challenger_output_hash": output_hash,
+        "signature": hex::encode(signature.to_bytes()),
+        "public_key": hex::encode(public_key.to_bytes()),
+    })
+}
+
+// ── Numeric tolerance: within threshold → no fraud ───────────────────────────
+
+#[actix_web::test]
+async fn http_numeric_tolerance_within_threshold_no_fraud() {
+    setup_env();
+    let store = Arc::new(MemoryStore::new());
+    // Oracle output: 42.0, challenger output: 42.5, threshold: 1.0 → match
+    let claim = claim_with_tolerance(
+        "nt-1",
+        r#"{"result": 42.0}"#,
+        &"c".repeat(64),
+        OutputTolerance::Numeric { threshold: 1.0 },
+    );
+    store.write_inference_claim(&claim).unwrap();
+
+    let state = make_state_with_staking(store.clone());
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(ApiRoutes::configure),
+    )
+    .await;
+
+    // Challenger output: 42.5 (within 1.0 threshold) but different hash
+    let body = challenge_body_with_output("nt-1", &"f".repeat(64), r#"{"result": 42.5}"#);
+    let req = test::TestRequest::post()
+        .uri("/api/v1/inference/challenge")
+        .set_json(&body)
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let result: ApiResponse<serde_json::Value> = test::read_body_json(resp).await;
+    let data = result.data.unwrap();
+    // Outputs are within tolerance → challenge fails (oracle was correct)
+    assert_eq!(data["succeeded"], false);
+    assert_eq!(data["claim_status"], "Rejected");
+}
+
+// ── Numeric tolerance: outside threshold → fraud ─────────────────────────────
+
+#[actix_web::test]
+async fn http_numeric_tolerance_outside_threshold_fraud() {
+    setup_env();
+    let store = Arc::new(MemoryStore::new());
+    // Oracle output: 42.0, threshold: 1.0
+    let claim = claim_with_tolerance(
+        "nt-2",
+        r#"{"result": 42.0}"#,
+        &"c".repeat(64),
+        OutputTolerance::Numeric { threshold: 1.0 },
+    );
+    store.write_inference_claim(&claim).unwrap();
+
+    let state = make_state_with_staking(store.clone());
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(ApiRoutes::configure),
+    )
+    .await;
+
+    // Challenger output: 50.0 (outside 1.0 threshold)
+    let body = challenge_body_with_output("nt-2", &"f".repeat(64), r#"{"result": 50.0}"#);
+    let req = test::TestRequest::post()
+        .uri("/api/v1/inference/challenge")
+        .set_json(&body)
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let result: ApiResponse<serde_json::Value> = test::read_body_json(resp).await;
+    let data = result.data.unwrap();
+    assert_eq!(data["succeeded"], true);
+    assert_eq!(data["claim_status"], "Slashed");
+}
+
+// ── Cosine tolerance: similar vectors → no fraud ─────────────────────────────
+
+#[actix_web::test]
+async fn http_cosine_tolerance_similar_vectors_no_fraud() {
+    setup_env();
+    let store = Arc::new(MemoryStore::new());
+    // Oracle embedding: [1.0, 0.0, 0.0]
+    let claim = claim_with_tolerance(
+        "ct-1",
+        "[1.0, 0.0, 0.0]",
+        &"c".repeat(64),
+        OutputTolerance::Cosine {
+            min_similarity: 0.95,
+        },
+    );
+    store.write_inference_claim(&claim).unwrap();
+
+    let state = make_state_with_staking(store.clone());
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(ApiRoutes::configure),
+    )
+    .await;
+
+    // Challenger embedding: [0.99, 0.1, 0.0] → cosine ~ 0.995 (above 0.95)
+    let body = challenge_body_with_output("ct-1", &"f".repeat(64), "[0.99, 0.1, 0.0]");
+    let req = test::TestRequest::post()
+        .uri("/api/v1/inference/challenge")
+        .set_json(&body)
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let result: ApiResponse<serde_json::Value> = test::read_body_json(resp).await;
+    let data = result.data.unwrap();
+    assert_eq!(data["succeeded"], false);
+    assert_eq!(data["claim_status"], "Rejected");
+}
+
+// ── Cosine tolerance: orthogonal vectors → fraud ─────────────────────────────
+
+#[actix_web::test]
+async fn http_cosine_tolerance_different_vectors_fraud() {
+    setup_env();
+    let store = Arc::new(MemoryStore::new());
+    // Oracle embedding: [1.0, 0.0, 0.0]
+    let claim = claim_with_tolerance(
+        "ct-2",
+        "[1.0, 0.0, 0.0]",
+        &"c".repeat(64),
+        OutputTolerance::Cosine {
+            min_similarity: 0.95,
+        },
+    );
+    store.write_inference_claim(&claim).unwrap();
+
+    let state = make_state_with_staking(store.clone());
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(ApiRoutes::configure),
+    )
+    .await;
+
+    // Challenger embedding: [0.0, 1.0, 0.0] → cosine = 0.0 (below 0.95)
+    let body = challenge_body_with_output("ct-2", &"f".repeat(64), "[0.0, 1.0, 0.0]");
+    let req = test::TestRequest::post()
+        .uri("/api/v1/inference/challenge")
+        .set_json(&body)
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let result: ApiResponse<serde_json::Value> = test::read_body_json(resp).await;
+    let data = result.data.unwrap();
+    assert_eq!(data["succeeded"], true);
+    assert_eq!(data["claim_status"], "Slashed");
+}
+
+// ── Exact mode backward compat ───────────────────────────────────────────────
+
+#[actix_web::test]
+async fn http_exact_tolerance_same_hash_no_fraud() {
+    setup_env();
+    let store = Arc::new(MemoryStore::new());
+    let claim = claim_with_tolerance(
+        "ex-1",
+        "any output",
+        &"c".repeat(64),
+        OutputTolerance::Exact,
+    );
+    store.write_inference_claim(&claim).unwrap();
+
+    let state = make_state_with_staking(store.clone());
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(ApiRoutes::configure),
+    )
+    .await;
+
+    // Same hash → no fraud
+    let body = challenge_body_with_output("ex-1", &"c".repeat(64), "same output");
+    let req = test::TestRequest::post()
+        .uri("/api/v1/inference/challenge")
+        .set_json(&body)
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let result: ApiResponse<serde_json::Value> = test::read_body_json(resp).await;
+    let data = result.data.unwrap();
+    assert_eq!(data["succeeded"], false);
+    assert_eq!(data["claim_status"], "Rejected");
+}
+
+// ── OutputTolerance serde ────────────────────────────────────────────────────
+
+#[actix_web::test]
+async fn output_tolerance_serde_roundtrip() {
+    for tolerance in [
+        OutputTolerance::Exact,
+        OutputTolerance::Numeric { threshold: 0.5 },
+        OutputTolerance::Cosine {
+            min_similarity: 0.95,
+        },
+    ] {
+        let json = serde_json::to_string(&tolerance).unwrap();
+        let decoded: OutputTolerance = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, tolerance);
+    }
+}
+
+#[actix_web::test]
+async fn output_tolerance_default_is_exact() {
+    assert_eq!(OutputTolerance::default(), OutputTolerance::Exact);
+}
+
+// ── Cosine with JSON embedding field ─────────────────────────────────────────
+
+#[actix_web::test]
+async fn http_cosine_json_embedding_field() {
+    setup_env();
+    let store = Arc::new(MemoryStore::new());
+    let claim = claim_with_tolerance(
+        "ce-1",
+        r#"{"embedding": [1.0, 0.0, 0.0]}"#,
+        &"c".repeat(64),
+        OutputTolerance::Cosine {
+            min_similarity: 0.9,
+        },
+    );
+    store.write_inference_claim(&claim).unwrap();
+
+    let state = make_state_with_staking(store.clone());
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(ApiRoutes::configure),
+    )
+    .await;
+
+    // Challenger uses "embedding" field too, similar vector
+    let body = challenge_body_with_output(
+        "ce-1",
+        &"f".repeat(64),
+        r#"{"embedding": [0.95, 0.1, 0.05]}"#,
+    );
+    let req = test::TestRequest::post()
+        .uri("/api/v1/inference/challenge")
+        .set_json(&body)
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let result: ApiResponse<serde_json::Value> = test::read_body_json(resp).await;
+    let data = result.data.unwrap();
+    // cosine(1,0,0 · 0.95,0.1,0.05) ≈ 0.994 > 0.9 → no fraud
+    assert_eq!(data["succeeded"], false);
 }

@@ -14,7 +14,7 @@
 use crate::api::errors::{enforce_acl, ApiError, ApiResponse, ApiResult, ErrorDto};
 use crate::api::handlers::channels::{channel_id_from_req, get_channel_store};
 use crate::app_state::AppState;
-use crate::storage::traits::{ClaimStatus, InferenceChallenge, InferenceClaim};
+use crate::storage::traits::{ClaimStatus, InferenceChallenge, InferenceClaim, OutputTolerance};
 use actix_web::{get, post, web, HttpRequest, HttpResponse};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -82,6 +82,9 @@ pub struct SubmitInferenceRequest {
     pub signature: String,
     /// Ed25519 public key (hex, 64 chars = 32 bytes).
     pub public_key: String,
+    /// Tolerance mode: "exact" (default), {"numeric": threshold}, {"cosine": min_similarity}.
+    #[serde(default)]
+    pub tolerance: OutputTolerance,
 }
 
 #[derive(Deserialize)]
@@ -140,6 +143,94 @@ fn verify_ed25519(public_key_hex: &str, message: &[u8], signature_hex: &str) -> 
         (Some(vk), Some(sig)) => vk.verify(message, &sig).is_ok(),
         _ => false,
     }
+}
+
+/// Compare two inference outputs using the claim's tolerance mode.
+///
+/// Returns `true` if the outputs are considered equivalent (no fraud).
+fn resolve_outputs(
+    tolerance: &OutputTolerance,
+    oracle_output: &str,
+    oracle_hash: &str,
+    challenger_output: &str,
+    challenger_hash: &str,
+) -> bool {
+    match tolerance {
+        OutputTolerance::Exact => oracle_hash == challenger_hash,
+        OutputTolerance::Numeric { threshold } => {
+            // Parse both outputs as f64, compare within threshold
+            match (
+                parse_numeric_output(oracle_output),
+                parse_numeric_output(challenger_output),
+            ) {
+                (Some(a), Some(b)) => (a - b).abs() <= *threshold,
+                // If either can't be parsed, fall back to exact hash comparison
+                _ => oracle_hash == challenger_hash,
+            }
+        }
+        OutputTolerance::Cosine { min_similarity } => {
+            // Parse both outputs as f64 vectors, compute cosine similarity
+            match (
+                parse_vector_output(oracle_output),
+                parse_vector_output(challenger_output),
+            ) {
+                (Some(a), Some(b)) if a.len() == b.len() && !a.is_empty() => {
+                    cosine_similarity(&a, &b) >= *min_similarity
+                }
+                // If either can't be parsed or lengths differ, fall back to exact
+                _ => oracle_hash == challenger_hash,
+            }
+        }
+    }
+}
+
+/// Parse a JSON output as a single f64 number.
+fn parse_numeric_output(output: &str) -> Option<f64> {
+    // Try direct number parse
+    if let Ok(v) = output.trim().parse::<f64>() {
+        return Some(v);
+    }
+    // Try JSON with "result" field
+    if let Ok(obj) = serde_json::from_str::<serde_json::Value>(output) {
+        if let Some(n) = obj.get("result").and_then(|v| v.as_f64()) {
+            return Some(n);
+        }
+        // Try root-level number
+        if let Some(n) = obj.as_f64() {
+            return Some(n);
+        }
+    }
+    None
+}
+
+/// Parse a JSON output as a vector of f64.
+fn parse_vector_output(output: &str) -> Option<Vec<f64>> {
+    if let Ok(arr) = serde_json::from_str::<Vec<f64>>(output) {
+        return Some(arr);
+    }
+    // Try JSON with "embedding" or "vector" field
+    if let Ok(obj) = serde_json::from_str::<serde_json::Value>(output) {
+        for key in &["embedding", "vector", "result"] {
+            if let Some(arr) = obj.get(key).and_then(|v| v.as_array()) {
+                let nums: Option<Vec<f64>> = arr.iter().map(|v| v.as_f64()).collect();
+                if let Some(v) = nums {
+                    return Some(v);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Cosine similarity between two vectors. Returns 0.0 for zero-magnitude vectors.
+fn cosine_similarity(a: &[f64], b: &[f64]) -> f64 {
+    let dot: f64 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let mag_a: f64 = a.iter().map(|x| x * x).sum::<f64>().sqrt();
+    let mag_b: f64 = b.iter().map(|x| x * x).sum::<f64>().sqrt();
+    if mag_a == 0.0 || mag_b == 0.0 {
+        return 0.0;
+    }
+    dot / (mag_a * mag_b)
 }
 
 /// POST /api/v1/inference/submit
@@ -238,6 +329,7 @@ pub async fn submit_inference(
         timestamp: now,
         signature: body.signature.clone(),
         status: ClaimStatus::Pending,
+        tolerance: body.tolerance.clone(),
         dispute_deadline: now + dispute_window(),
         finalized_at: None,
     };
@@ -366,8 +458,14 @@ pub async fn challenge_inference(
     // Create the challenge
     let challenge_id = uuid::Uuid::new_v4().to_string();
 
-    // Resolution: compare output hashes
-    let outputs_match = claim.output_hash == body.challenger_output_hash;
+    // Resolution: compare outputs using claim's tolerance mode
+    let outputs_match = resolve_outputs(
+        &claim.tolerance,
+        &claim.output,
+        &claim.output_hash,
+        &body.challenger_output,
+        &body.challenger_output_hash,
+    );
     let challenge_succeeded = !outputs_match;
 
     let challenge = InferenceChallenge {

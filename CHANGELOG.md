@@ -8,6 +8,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) · Versioning: 
 
 ### 2026-05-22
 
+**Optimistic ML Oracle — Phase 3 (Non-deterministic models)**
+
+- `OutputTolerance` enum: `Exact` (hash match), `Numeric{threshold}` (absolute difference), `Cosine{min_similarity}` (vector similarity)
+- Claims declare their tolerance mode at submit time; resolution uses it during challenges
+- Numeric: parses `{"result": N}` or raw number, compares within threshold
+- Cosine: parses `[f64]` arrays or `{"embedding": [...]}` / `{"vector": [...]}`, computes cosine similarity
+- Falls back to exact hash comparison if outputs can't be parsed
+- Backward compatible: `Exact` is the default, all Phase 1/2 claims unchanged
+
 **Optimistic ML Oracle — Phase 2 (Disputes)**
 
 - `POST /api/v1/inference/challenge` — challenge a pending claim with re-executed output

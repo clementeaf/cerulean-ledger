@@ -6,8 +6,8 @@ use crate::api::handlers::{
     acl, alias, audit, blocks, chain, chaincode, channels, compliance, compliance_auto, contact,
     credentials, discovery, events, forensic, gateway, governance, governance_entities, identity,
     intelligence, interop, invitations, legal_oracle, msp, oracle, organizations, pentest, pin,
-    private_data, proposals, registry, regulatory, snapshots, stress, tokenization, transactions,
-    utilities, vault, zkp,
+    private_data, proposals, registry, regulatory, snapshots, staking, stress, tokenization,
+    transactions, utilities, vault, zkp,
 };
 
 /// API routes configuration
@@ -213,6 +213,13 @@ impl ApiRoutes {
         cfg.service(vault::vault_store)
             .service(vault::vault_get)
             .service(vault::vault_recover);
+        // Staking (validator registration, unstaking, queries)
+        cfg.service(staking::stake)
+            .service(staking::request_unstake)
+            .service(staking::complete_unstake)
+            .service(staking::get_validators)
+            .service(staking::get_validator)
+            .service(staking::get_my_stake);
         // Alias registry (zero-knowledge alias system)
         cfg.service(alias::alias_register)
             .service(alias::alias_resolve)

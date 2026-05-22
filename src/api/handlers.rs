@@ -34,6 +34,7 @@ pub mod proposals;
 pub mod registry;
 pub mod regulatory;
 pub mod snapshots;
+pub mod staking;
 pub mod stress;
 pub mod tokenization;
 pub mod transactions;

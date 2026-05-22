@@ -14,6 +14,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) · Versioning: 
 - Prevents cross-endpoint replay (previously both signed the raw commitment)
 - **Breaking:** wallets must update their signing payload format
 
+**Staking endpoints migrated to `/api/v1` scaffold**
+
+- `POST /api/v1/staking/stake` — stake tokens to become a validator
+- `POST /api/v1/staking/unstake` — request unstaking (lock period)
+- `POST /api/v1/staking/complete-unstake` — complete unstaking after lock period
+- `GET /api/v1/staking/validators` — list active validators
+- `GET /api/v1/staking/validator/{address}` — get validator info
+- `GET /api/v1/staking/my-stake/{address}` — get own stake info
+- Uses `ApiResponse<T>` envelope, `enforce_acl`, and `tx_pool` (consistent with scaffold)
+- Legacy routes at `/staking/*` still exist but are superseded
+
 **Fast deploy pipeline**
 
 - `scripts/deploy.sh` — single command: cross-compile → scp → docker rebuild on EC2

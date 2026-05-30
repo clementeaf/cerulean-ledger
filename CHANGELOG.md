@@ -8,6 +8,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) · Versioning: 
 
 ### 2026-05-30
 
+**Notarization — Proof of Existence service**
+
+- `POST /api/v1/notarize` — register a document hash with Ed25519 signature verification
+- `GET /api/v1/notarize/verify/{hash}` — verify a document hash exists on-chain
+- `GET /api/v1/notarize/{id}` — get notarization by ID
+- `GET /api/v1/notarize` — list notarizations (filter by `?signer=`)
+- `NotarizationEntry` type: id, content_hash, signer, metadata, timestamp, block_height, signature
+- Storage: `notarizations` column family (RocksDB) with `hash:` secondary index
+- Signing payload: `"notarize:{content_hash}"`
+- Duplicate detection: returns existing record on 409 if hash already notarized
+- Document never leaves client — only SHA-256 hash is submitted
+
 **Originality verification report and reproducible audit script**
 
 - `docs/INFORME-ORIGINALIDAD-CERULEAN-LEDGER.md` — forensic comparison against `Alefrank76/cerulean-dlt-framework`

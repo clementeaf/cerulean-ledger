@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use super::errors::{StorageError, StorageResult};
 use super::traits::{
     Acta, AliasEntry, Assembly, Block, BlockStore, ClaimStatus, Credential, IdentityRecord,
-    InferenceChallenge, InferenceClaim, Invitation, Scope, Session, Transaction,
+    InferenceChallenge, InferenceClaim, Invitation, NotarizationEntry, Scope, Session, Transaction,
 };
 use crate::registry::compliance::{ComplianceResult, ComplianceRule};
 use crate::registry::tokenization::AssetToken;
@@ -53,6 +53,8 @@ pub struct MemoryStore {
     inference_challenges: Mutex<HashMap<String, InferenceChallenge>>,
     /// Invitations: id → Invitation
     invitations: Mutex<HashMap<String, Invitation>>,
+    /// Notarizations: id → NotarizationEntry
+    notarizations: Mutex<HashMap<String, NotarizationEntry>>,
 }
 
 impl MemoryStore {
@@ -80,6 +82,7 @@ impl MemoryStore {
             inference_claims: Mutex::new(HashMap::new()),
             inference_challenges: Mutex::new(HashMap::new()),
             invitations: Mutex::new(HashMap::new()),
+            notarizations: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -695,6 +698,46 @@ impl BlockStore for MemoryStore {
             .filter(|i| i.from_did == from_did)
             .cloned()
             .collect())
+    }
+
+    // ── Notarization ─────────────────────────────────────────────────────
+
+    fn write_notarization(&self, entry: &NotarizationEntry) -> StorageResult<()> {
+        self.notarizations
+            .lock()
+            .unwrap()
+            .insert(entry.id.clone(), entry.clone());
+        Ok(())
+    }
+
+    fn read_notarization(&self, id: &str) -> StorageResult<NotarizationEntry> {
+        self.notarizations
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .ok_or_else(|| StorageError::KeyNotFound(format!("notarization:{id}")))
+    }
+
+    fn read_notarization_by_hash(&self, content_hash: &str) -> StorageResult<NotarizationEntry> {
+        self.notarizations
+            .lock()
+            .unwrap()
+            .values()
+            .find(|e| e.content_hash == content_hash)
+            .cloned()
+            .ok_or_else(|| StorageError::KeyNotFound(format!("notarization:hash:{content_hash}")))
+    }
+
+    fn list_notarizations(&self, signer: Option<&str>) -> StorageResult<Vec<NotarizationEntry>> {
+        let all = self.notarizations.lock().unwrap();
+        let mut result: Vec<_> = all
+            .values()
+            .filter(|e| signer.is_none_or(|s| e.signer == s))
+            .cloned()
+            .collect();
+        result.sort_by_key(|b| std::cmp::Reverse(b.notarized_at));
+        Ok(result)
     }
 }
 

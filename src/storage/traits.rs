@@ -237,6 +237,32 @@ pub struct HistoryEntry {
     pub is_delete: bool,
 }
 
+/// Notarization entry — proof of existence for a document hash.
+///
+/// The node stores only the SHA-256 hash of the document, never the document itself.
+/// Clients compute the hash locally and submit it for on-chain timestamping.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct NotarizationEntry {
+    /// Unique identifier (UUID).
+    pub id: String,
+    /// SHA-256 hash of the document (64 hex chars).
+    pub content_hash: String,
+    /// DID or address of the signer.
+    pub signer: String,
+    /// Optional metadata (document name, description, etc.).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+    /// Unix timestamp when notarized.
+    pub notarized_at: u64,
+    /// Block height at time of notarization (0 if not yet anchored).
+    pub block_height: u64,
+    /// Ed25519 signature over `"notarize:{content_hash}"` (hex-encoded).
+    pub signature: String,
+    /// Signing algorithm used.
+    #[serde(default)]
+    pub signature_algorithm: SigningAlgorithm,
+}
+
 /// Alias registry entry — maps a SHA3-256 commitment to a DID.
 ///
 /// The commitment is `SHA3-256(salt || alias)` where the salt is deterministic:
@@ -689,6 +715,32 @@ pub trait BlockStore: Send + Sync {
         Ok(vec![])
     }
 
+    // ── Notarization (Proof of Existence) ──────────────────────────────
+
+    /// Store a notarization entry keyed by ID.
+    fn write_notarization(&self, _entry: &NotarizationEntry) -> StorageResult<()> {
+        Ok(())
+    }
+
+    /// Read a notarization entry by ID.
+    fn read_notarization(&self, _id: &str) -> StorageResult<NotarizationEntry> {
+        Err(super::errors::StorageError::KeyNotFound(
+            "notarization not found".into(),
+        ))
+    }
+
+    /// Find a notarization by content hash (reverse lookup).
+    fn read_notarization_by_hash(&self, _content_hash: &str) -> StorageResult<NotarizationEntry> {
+        Err(super::errors::StorageError::KeyNotFound(
+            "notarization not found for hash".into(),
+        ))
+    }
+
+    /// List all notarizations, optionally filtered by signer DID.
+    fn list_notarizations(&self, _signer: Option<&str>) -> StorageResult<Vec<NotarizationEntry>> {
+        Ok(vec![])
+    }
+
     // ── Alias Registry ────────────────────────────────────────────────────
 
     /// Store an alias entry keyed by commitment.
@@ -943,6 +995,18 @@ impl<T: BlockStore> BlockStore for Arc<T> {
     }
     fn list_challenges_by_claim(&self, claim_id: &str) -> StorageResult<Vec<InferenceChallenge>> {
         (**self).list_challenges_by_claim(claim_id)
+    }
+    fn write_notarization(&self, entry: &NotarizationEntry) -> StorageResult<()> {
+        (**self).write_notarization(entry)
+    }
+    fn read_notarization(&self, id: &str) -> StorageResult<NotarizationEntry> {
+        (**self).read_notarization(id)
+    }
+    fn read_notarization_by_hash(&self, content_hash: &str) -> StorageResult<NotarizationEntry> {
+        (**self).read_notarization_by_hash(content_hash)
+    }
+    fn list_notarizations(&self, signer: Option<&str>) -> StorageResult<Vec<NotarizationEntry>> {
+        (**self).list_notarizations(signer)
     }
 }
 

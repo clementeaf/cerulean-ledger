@@ -26,6 +26,7 @@ pub mod interop;
 pub mod invitations;
 pub mod legal_oracle;
 pub mod msp;
+pub mod notarize;
 pub mod oracle;
 pub mod organizations;
 pub mod pentest;

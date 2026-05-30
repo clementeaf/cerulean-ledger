@@ -83,6 +83,9 @@ const CF_COMPLIANCE_RESULTS: &str = "compliance_results";
 const CF_ALIASES: &str = "aliases";
 const CF_INFERENCE_CLAIMS: &str = "inference_claims";
 const CF_INVITATIONS: &str = "invitations";
+/// Notarizations (Proof of Existence): key = id, value = JSON NotarizationEntry
+/// Secondary index: `hash:{content_hash}` → id
+const CF_NOTARIZATIONS: &str = "notarizations";
 
 const META_LATEST_HEIGHT: &[u8] = b"latest_height";
 
@@ -123,6 +126,7 @@ const ALL_CFS: &[&str] = &[
     CF_ALIASES,
     CF_INFERENCE_CLAIMS,
     CF_INVITATIONS,
+    CF_NOTARIZATIONS,
 ];
 
 /// RocksDB-backed block store using Column Families for data isolation
@@ -1624,6 +1628,87 @@ impl BlockStore for RocksDbBlockStore {
                 result.push(inv);
             }
         }
+        Ok(result)
+    }
+
+    // ── Notarization (Proof of Existence) ──────────────────────────────
+
+    fn write_notarization(&self, entry: &super::traits::NotarizationEntry) -> StorageResult<()> {
+        let cf = self
+            .db
+            .cf_handle(CF_NOTARIZATIONS)
+            .ok_or_else(|| StorageError::RocksDbError("missing notarizations CF".into()))?;
+        let json = serde_json::to_vec(entry)
+            .map_err(|e| StorageError::SerializationError(e.to_string()))?;
+        // Primary key: id → full entry
+        self.db
+            .put_cf(&cf, entry.id.as_bytes(), &json)
+            .map_err(|e| StorageError::RocksDbError(e.to_string()))?;
+        // Secondary index: hash:{content_hash} → id (for verify-by-hash lookup)
+        let hash_key = format!("hash:{}", entry.content_hash);
+        self.db
+            .put_cf(&cf, hash_key.as_bytes(), entry.id.as_bytes())
+            .map_err(|e| StorageError::RocksDbError(e.to_string()))?;
+        Ok(())
+    }
+
+    fn read_notarization(&self, id: &str) -> StorageResult<super::traits::NotarizationEntry> {
+        let cf = self
+            .db
+            .cf_handle(CF_NOTARIZATIONS)
+            .ok_or_else(|| StorageError::RocksDbError("missing notarizations CF".into()))?;
+        let data = self
+            .db
+            .get_cf(&cf, id.as_bytes())
+            .map_err(|e| StorageError::RocksDbError(e.to_string()))?
+            .ok_or_else(|| StorageError::KeyNotFound(format!("notarization:{id}")))?;
+        serde_json::from_slice(&data).map_err(|e| StorageError::DeserializationError(e.to_string()))
+    }
+
+    fn read_notarization_by_hash(
+        &self,
+        content_hash: &str,
+    ) -> StorageResult<super::traits::NotarizationEntry> {
+        let cf = self
+            .db
+            .cf_handle(CF_NOTARIZATIONS)
+            .ok_or_else(|| StorageError::RocksDbError("missing notarizations CF".into()))?;
+        let hash_key = format!("hash:{content_hash}");
+        let id_bytes = self
+            .db
+            .get_cf(&cf, hash_key.as_bytes())
+            .map_err(|e| StorageError::RocksDbError(e.to_string()))?
+            .ok_or_else(|| {
+                StorageError::KeyNotFound(format!("notarization:hash:{content_hash}"))
+            })?;
+        let id = String::from_utf8(id_bytes)
+            .map_err(|e| StorageError::DeserializationError(e.to_string()))?;
+        self.read_notarization(&id)
+    }
+
+    fn list_notarizations(
+        &self,
+        signer: Option<&str>,
+    ) -> StorageResult<Vec<super::traits::NotarizationEntry>> {
+        let cf = self
+            .db
+            .cf_handle(CF_NOTARIZATIONS)
+            .ok_or_else(|| StorageError::RocksDbError("missing notarizations CF".into()))?;
+        let mut result = Vec::new();
+        for item in self.db.iterator_cf(&cf, IteratorMode::Start) {
+            let (key, value) = item.map_err(|e| StorageError::RocksDbError(e.to_string()))?;
+            // Skip secondary index keys
+            let key_str = String::from_utf8_lossy(&key);
+            if key_str.starts_with("hash:") {
+                continue;
+            }
+            let entry: super::traits::NotarizationEntry = serde_json::from_slice(&value)
+                .map_err(|e| StorageError::DeserializationError(e.to_string()))?;
+            if signer.is_none_or(|s| entry.signer == s) {
+                result.push(entry);
+            }
+        }
+        result.sort_by_key(|b| std::cmp::Reverse(b.notarized_at));
         Ok(result)
     }
 }

@@ -5,9 +5,9 @@ use crate::api::handlers::evm;
 use crate::api::handlers::{
     acl, alias, audit, blocks, chain, chaincode, channels, compliance, compliance_auto, contact,
     credentials, discovery, events, forensic, gateway, governance, governance_entities, identity,
-    inference, intelligence, interop, invitations, legal_oracle, msp, oracle, organizations,
-    pentest, pin, private_data, proposals, registry, regulatory, snapshots, staking, stress,
-    tokenization, transactions, utilities, vault, zkp,
+    inference, intelligence, interop, invitations, legal_oracle, msp, notarize, oracle,
+    organizations, pentest, pin, private_data, proposals, registry, regulatory, snapshots, staking,
+    stress, tokenization, transactions, utilities, vault, zkp,
 };
 
 /// API routes configuration
@@ -234,6 +234,11 @@ impl ApiRoutes {
             .service(alias::alias_resolve)
             .service(alias::alias_by_did)
             .service(alias::alias_revoke);
+        // Notarization (Proof of Existence)
+        cfg.service(notarize::submit_notarization)
+            .service(notarize::verify_notarization)
+            .service(notarize::get_notarization)
+            .service(notarize::list_notarizations);
         // Invitations (governance proposal invitations via alias)
         cfg.service(invitations::create_invitation)
             .service(invitations::list_invitations)

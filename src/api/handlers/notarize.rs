@@ -66,7 +66,7 @@ pub struct NotarizeRequest {
     pub signer: String,
     /// Ed25519 public key (hex, 64 chars = 32 bytes).
     pub public_key: String,
-    /// Ed25519 signature over `"notarize:{content_hash}"`, hex-encoded.
+    /// Ed25519 signature over `"notarize:{signer}:{content_hash}"`, hex-encoded.
     pub signature: String,
     /// Optional metadata (document name, description, etc.).
     #[serde(default)]
@@ -114,8 +114,10 @@ pub async fn submit_notarization(
         )));
     }
 
-    // Verify signature over "notarize:{content_hash}"
-    let sign_msg = format!("notarize:{}", body.content_hash);
+    // Verify signature over "notarize:{signer}:{content_hash}"
+    // The signer is included in the signed payload to prevent impersonation:
+    // only the holder of the private key can claim a specific signer identity.
+    let sign_msg = format!("notarize:{}:{}", body.signer, body.content_hash);
     if !verify_ed25519(&body.public_key, sign_msg.as_bytes(), &body.signature) {
         return Ok(HttpResponse::Unauthorized().json(ApiResponse::<()>::error(
             err_dto("INVALID_SIGNATURE", "Ed25519 signature verification failed"),
@@ -124,15 +126,10 @@ pub async fn submit_notarization(
     }
 
     // Check for duplicate: same content_hash already notarized
-    if let Ok(existing) = store.read_notarization_by_hash(&body.content_hash) {
-        return Ok(HttpResponse::Conflict().json(ApiResponse::success(
-            serde_json::json!({
-                "message": "document already notarized",
-                "id": existing.id,
-                "notarized_at": existing.notarized_at,
-                "signer": existing.signer,
-            }),
-            trace,
+    if store.read_notarization_by_hash(&body.content_hash).is_ok() {
+        return Ok(HttpResponse::Conflict().json(ApiResponse::<()>::error(
+            err_dto("ALREADY_NOTARIZED", "document already notarized"),
+            409,
         )));
     }
 

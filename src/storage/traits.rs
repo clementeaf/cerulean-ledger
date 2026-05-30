@@ -256,7 +256,7 @@ pub struct NotarizationEntry {
     pub notarized_at: u64,
     /// Block height at time of notarization (0 if not yet anchored).
     pub block_height: u64,
-    /// Ed25519 signature over `"notarize:{content_hash}"` (hex-encoded).
+    /// Ed25519 signature over `"notarize:{signer}:{content_hash}"` (hex-encoded).
     pub signature: String,
     /// Signing algorithm used.
     #[serde(default)]

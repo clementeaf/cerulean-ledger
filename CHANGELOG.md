@@ -16,8 +16,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) · Versioning: 
 - `GET /api/v1/notarize` — list notarizations (filter by `?signer=`)
 - `NotarizationEntry` type: id, content_hash, signer, metadata, timestamp, block_height, signature
 - Storage: `notarizations` column family (RocksDB) with `hash:` secondary index
-- Signing payload: `"notarize:{content_hash}"`
-- Duplicate detection: returns existing record on 409 if hash already notarized
+- Signing payload: `"notarize:{signer}:{content_hash}"` — signer bound to signature to prevent impersonation
+- Duplicate detection: returns 409 error if hash already notarized
 - Document never leaves client — only SHA-256 hash is submitted
 
 **Originality verification report and reproducible audit script**

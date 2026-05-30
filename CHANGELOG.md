@@ -6,6 +6,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) · Versioning: 
 
 ## [Unreleased]
 
+### 2026-05-30
+
+**Originality verification report and reproducible audit script**
+
+- `docs/INFORME-ORIGINALIDAD-CERULEAN-LEDGER.md` — forensic comparison against `Alefrank76/cerulean-dlt-framework`
+- `scripts/verify-originality.sh` — reproducible 8-step verification script any third party can run
+- Covers: temporal precedence, framework incompatibility, line-by-line diff, struct/function signatures, SHA-256 checksums
+- Result: 4 trivial matches out of 215 non-trivial lines (1.9%), all generic Rust field declarations
+
+---
+
 ### 2026-05-22
 
 **Optimistic ML Oracle — Phase 4 (zkML Bridge)**

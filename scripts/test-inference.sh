@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Smoke test: Optimistic ML Oracle against live node
+# Smoke test: Optimistic ML Oracle against a live node
 # Usage: ./scripts/test-inference.sh [host]
+#
+# Default: local node (cargo run or docker compose sandbox on :8080)
 
-HOST="${1:-http://52.201.112.87:9600}"
+HOST="${1:-http://127.0.0.1:8080}"
 API="$HOST/api/v1"
 PASS=0
 FAIL=0

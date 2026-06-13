@@ -3,10 +3,11 @@
 #
 # Usage:
 #   ./scripts/build-static.sh              # Build image + extract binary
-#   ./scripts/build-static.sh --deploy     # Build + deploy to EC2 via SCP
+#   DEPLOY_HOST=host DEPLOY_KEY=~/.ssh/key.pem ./scripts/build-static.sh --deploy
 #
 # Output: ./dist/cerulean-node-linux-amd64
 #
+# Note: requires Dockerfile.static (removed from repo). Use deploy.sh or cargo build instead.
 # The binary has ZERO runtime dependencies — runs on any Linux.
 
 set -euo pipefail
@@ -18,6 +19,13 @@ BINARY="cerulean-node-linux-amd64"
 IMAGE="cerulean-node:static"
 
 cd "$REPO_ROOT"
+
+if [[ ! -f Dockerfile.static ]]; then
+    echo "ERROR: Dockerfile.static not found."
+    echo "  Use:  cross build --release --target x86_64-unknown-linux-gnu --bin rust-bc"
+    echo "  Or:   ./scripts/deploy.sh  (cross-compile to dist/)"
+    exit 1
+fi
 
 echo "=== Building static binary (musl) ==="
 docker build -f Dockerfile.static -t "$IMAGE" .
@@ -31,22 +39,25 @@ docker rm "$CONTAINER_ID" > /dev/null
 chmod +x "$DIST/$BINARY"
 SIZE=$(du -h "$DIST/$BINARY" | cut -f1)
 echo "=== Built: $DIST/$BINARY ($SIZE) ==="
-
-# Verify it's static
 file "$DIST/$BINARY"
 
 if [[ "${1:-}" == "--deploy" ]]; then
-    # Load deploy config
-    EC2_KEY="${EC2_KEY:-$HOME/.ssh/rust-bc-test.pem}"
-    EC2_USER="${EC2_USER:-ec2-user}"
-    EC2_HOST="${EC2_HOST:-52.91.18.180}"
+    DEPLOY_KEY="${DEPLOY_KEY:-}"
+    DEPLOY_USER="${DEPLOY_USER:-ec2-user}"
+    DEPLOY_HOST="${DEPLOY_HOST:-}"
+
+    if [[ -z "$DEPLOY_HOST" || -z "$DEPLOY_KEY" ]]; then
+        echo ""
+        echo "ERROR: --deploy requires DEPLOY_HOST and DEPLOY_KEY (Cerulean EC2 removed 2026-06)."
+        exit 1
+    fi
 
     echo ""
-    echo "=== Deploying to $EC2_HOST ==="
-    scp -i "$EC2_KEY" -o StrictHostKeyChecking=no \
-        "$DIST/$BINARY" "$EC2_USER@$EC2_HOST:~/cerulean-node"
+    echo "=== Deploying to $DEPLOY_HOST ==="
+    scp -i "$DEPLOY_KEY" -o StrictHostKeyChecking=no \
+        "$DIST/$BINARY" "$DEPLOY_USER@$DEPLOY_HOST:~/cerulean-node"
 
-    ssh -i "$EC2_KEY" -o StrictHostKeyChecking=no "$EC2_USER@$EC2_HOST" \
+    ssh -i "$DEPLOY_KEY" -o StrictHostKeyChecking=no "$DEPLOY_USER@$DEPLOY_HOST" \
         "chmod +x ~/cerulean-node && echo 'Deployed: \$(~/cerulean-node --version 2>/dev/null || echo ok)'"
 
     echo "=== Deploy complete ==="

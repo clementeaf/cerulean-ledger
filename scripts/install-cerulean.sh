@@ -2,20 +2,20 @@
 # Install Cerulean Ledger node — single binary, zero dependencies.
 #
 # Usage:
-#   curl -sL https://ceruleanledger-releases.s3.amazonaws.com/install.sh | bash
-#   # or
-#   ./install-cerulean.sh
+#   sudo RELEASE_URL=https://your-host/releases/latest/cerulean-node-linux-amd64 ./install-cerulean.sh
+#   sudo LOCAL_BINARY=./dist/cerulean-node-linux-amd64 ./install-cerulean.sh
 #
 # What it does:
-#   1. Downloads the binary from S3
+#   1. Installs the binary (from RELEASE_URL or LOCAL_BINARY)
 #   2. Creates a systemd service
 #   3. Starts the node
 #
-# Requirements: Linux x86_64, curl, systemd
+# Requirements: Linux x86_64, curl (if using RELEASE_URL), systemd
 
 set -euo pipefail
 
-S3_URL="https://ceruleanledger-releases.s3.amazonaws.com/releases/latest/cerulean-node-linux-amd64"
+RELEASE_URL="${RELEASE_URL:-}"
+LOCAL_BINARY="${LOCAL_BINARY:-}"
 INSTALL_DIR="/usr/local/bin"
 DATA_DIR="/var/lib/cerulean"
 SERVICE_USER="cerulean"
@@ -23,33 +23,42 @@ BINARY="cerulean-node"
 
 echo "=== Cerulean Ledger Installer ==="
 
-# Check arch
 ARCH=$(uname -m)
 if [[ "$ARCH" != "x86_64" ]]; then
     echo "ERROR: Only x86_64 supported. Got: $ARCH"
     exit 1
 fi
 
-# Check root
 if [[ $EUID -ne 0 ]]; then
     echo "Run as root: sudo $0"
     exit 1
 fi
 
-# Download
-echo "Downloading binary..."
-curl -fSL "$S3_URL" -o "$INSTALL_DIR/$BINARY"
+if [[ -n "$LOCAL_BINARY" ]]; then
+    if [[ ! -f "$LOCAL_BINARY" ]]; then
+        echo "ERROR: LOCAL_BINARY not found: $LOCAL_BINARY"
+        exit 1
+    fi
+    echo "Installing from local binary: $LOCAL_BINARY"
+    cp "$LOCAL_BINARY" "$INSTALL_DIR/$BINARY"
+elif [[ -n "$RELEASE_URL" ]]; then
+    echo "Downloading binary from $RELEASE_URL..."
+    curl -fSL "$RELEASE_URL" -o "$INSTALL_DIR/$BINARY"
+else
+    echo "ERROR: Set RELEASE_URL or LOCAL_BINARY."
+    echo "  Example: sudo LOCAL_BINARY=./dist/cerulean-node-linux-amd64 $0"
+    exit 1
+fi
+
 chmod +x "$INSTALL_DIR/$BINARY"
 echo "  Installed: $INSTALL_DIR/$BINARY"
 
-# Create user + data dir
 if ! id "$SERVICE_USER" &>/dev/null; then
     useradd -r -s /bin/false -d "$DATA_DIR" "$SERVICE_USER"
 fi
 mkdir -p "$DATA_DIR"
 chown "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR"
 
-# Systemd service
 cat > /etc/systemd/system/cerulean-node.service <<EOF
 [Unit]
 Description=Cerulean Ledger Node
@@ -87,7 +96,6 @@ ReadWritePaths=$DATA_DIR
 WantedBy=multi-user.target
 EOF
 
-# Config directory
 mkdir -p /etc/cerulean
 if [[ ! -f /etc/cerulean/node.env ]]; then
     cat > /etc/cerulean/node.env <<'ENVEOF'
@@ -103,7 +111,6 @@ ENVEOF
     echo "  Config: /etc/cerulean/node.env"
 fi
 
-# Enable + start
 systemctl daemon-reload
 systemctl enable cerulean-node
 systemctl start cerulean-node

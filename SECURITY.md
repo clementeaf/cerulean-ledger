@@ -127,7 +127,7 @@ Reject if: timestamp < (current_time - 3600000) OR timestamp > (current_time + 3
 
 If you discover a security vulnerability in this project, please report it responsibly.
 
-**Contact:** security@ceruleanledger.com
+**Contact:** [GitHub Security Advisories](https://github.com/clementeaf/cerulean-ledger/security/advisories/new) (preferred) or open a private issue via repository maintainers
 
 **Process:**
 1. Send a description of the vulnerability to the contact above

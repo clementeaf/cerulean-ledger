@@ -31,7 +31,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) · Versioning: 
 - Cerulean-only AWS resources removed: EC2, CloudFront, S3 buckets, Route53 zone, ACM cert, security groups, key pair, orphan EBS
 - Domain `ceruleanledger.com` deletion initiated (pending registrant email authorization)
 - Deploy scripts updated: no hardcoded IPs or retired S3 bucket; remote targets via `DEPLOY_HOST` / `RELEASE_URL` env vars
+- `SECURITY.md` contact updated: email → GitHub Security Advisories
 - `interop.rs` instrument URL → GitHub repository
+- `Dockerfile.prebuilt` S3 pull reference → local cross-compile
+- `test-inference.sh` default host → localhost
 
 ### 2026-05-30
 

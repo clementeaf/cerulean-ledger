@@ -72,7 +72,7 @@ Cerulean Ledger tiene el motor técnico completo: 1,427+ tests, criptografía po
 
 **Qué se necesita:**
 - Deploy de ambos frontends a URL pública (VPS, Vercel, Cloudflare Pages, etc.)
-- Dominio propio (cerulean.cl, ceruleanledger.com, etc.)
+- Dominio propio (p. ej. cerulean.cl u otro TLD disponible)
 - Backend API accesible para que el explorer y el demo funcionen en vivo
 
 **Esfuerzo:** 2-3 días (infra, no código)

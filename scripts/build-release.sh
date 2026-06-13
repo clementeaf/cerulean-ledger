@@ -1,52 +1,66 @@
 #!/usr/bin/env bash
-# Build Cerulean Ledger release binary on a disposable EC2 c5.2xlarge.
+# Build Cerulean Ledger release binary on a disposable EC2 spot instance.
 #
 # Usage:
-#   ./scripts/build-release.sh              # Build + upload to S3
-#   ./scripts/build-release.sh --deploy     # Build + upload + deploy to prod EC2
+#   ./scripts/build-release.sh              # Spot build → dist/ (S3 upload if bucket set)
+#   ./scripts/build-release.sh --deploy     # Above + deploy if DEPLOY_HOST set
+#
+# Cerulean AWS stack removed 2026-06. Provide current infra via env:
+#   BUILD_SUBNET, BUILD_SECURITY_GROUP, BUILD_KEY_NAME, BUILD_SSH_KEY  (required)
+#   RELEASE_S3_BUCKET                                                  (optional upload)
+#   DEPLOY_HOST, DEPLOY_USER                                           (optional --deploy)
 #
 # Cost: ~$0.03 per build (c5.2xlarge spot, ~5 min)
-#
-# Prerequisites:
-#   - AWS CLI configured (aws sts get-caller-identity)
-#   - SSH key: ~/.ssh/rust-bc-test.pem
 
 set -euo pipefail
 
-REGION="us-east-1"
-SUBNET="subnet-0925d44e76529e2a3"
-SG="sg-0e0b542853c5db142"
-KEY_NAME="rust-bc-test"
-SSH_KEY="$HOME/.ssh/rust-bc-test.pem"
-INSTANCE_TYPE="c5.2xlarge"
-AMI="ami-0c7217cdde317cfec"  # Amazon Linux 2023 x86_64 us-east-1
-S3_BUCKET="ceruleanledger-releases"
+REGION="${AWS_REGION:-us-east-1}"
+SUBNET="${BUILD_SUBNET:-}"
+SG="${BUILD_SECURITY_GROUP:-}"
+KEY_NAME="${BUILD_KEY_NAME:-}"
+SSH_KEY="${BUILD_SSH_KEY:-}"
+INSTANCE_TYPE="${BUILD_INSTANCE_TYPE:-c5.2xlarge}"
+AMI="${BUILD_AMI:-ami-0c7217cdde317cfec}"
+S3_BUCKET="${RELEASE_S3_BUCKET:-}"
 VERSION="${VERSION:-$(date +%Y%m%d-%H%M%S)}"
 BINARY_NAME="cerulean-node-linux-amd64"
 S3_KEY="releases/${VERSION}/${BINARY_NAME}"
-
-# Prod EC2
-PROD_HOST="52.91.18.180"
-PROD_USER="ec2-user"
+DEPLOY_HOST="${DEPLOY_HOST:-}"
+DEPLOY_USER="${DEPLOY_USER:-ec2-user}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+require_aws_build_env() {
+    local missing=()
+    [[ -z "$SUBNET" ]] && missing+=("BUILD_SUBNET")
+    [[ -z "$SG" ]] && missing+=("BUILD_SECURITY_GROUP")
+    [[ -z "$KEY_NAME" ]] && missing+=("BUILD_KEY_NAME")
+    [[ -z "$SSH_KEY" ]] && missing+=("BUILD_SSH_KEY")
+    if ((${#missing[@]} > 0)); then
+        echo "ERROR: Cerulean AWS build infra removed. Set: ${missing[*]}"
+        exit 1
+    fi
+}
+
 cd "$REPO_ROOT"
+require_aws_build_env
 
 echo "=== Cerulean Ledger Release Build ==="
 echo "  Version:  $VERSION"
 echo "  Instance: $INSTANCE_TYPE (spot)"
-echo "  S3:       s3://$S3_BUCKET/$S3_KEY"
+if [[ -n "$S3_BUCKET" ]]; then
+    echo "  S3:       s3://$S3_BUCKET/$S3_KEY"
+else
+    echo "  S3:       (skipped — RELEASE_S3_BUCKET not set)"
+fi
 echo ""
 
-# 1. Ensure S3 bucket exists
-if ! aws s3 ls "s3://$S3_BUCKET" --region "$REGION" 2>/dev/null; then
+if [[ -n "$S3_BUCKET" ]] && ! aws s3 ls "s3://$S3_BUCKET" --region "$REGION" 2>/dev/null; then
     echo "Creating S3 bucket: $S3_BUCKET"
     aws s3 mb "s3://$S3_BUCKET" --region "$REGION"
 fi
 
-# 2. Create source tarball
 echo "=== Packaging source ==="
 TAR="/tmp/cerulean-src-${VERSION}.tar.gz"
 tar czf "$TAR" \
@@ -55,7 +69,6 @@ tar czf "$TAR" \
     --exclude=dist --exclude='*.pdf' .
 echo "  Source: $(du -h "$TAR" | cut -f1)"
 
-# 3. Launch spot instance
 echo "=== Launching build instance ==="
 INSTANCE_ID=$(aws ec2 run-instances \
     --region "$REGION" \
@@ -72,7 +85,6 @@ INSTANCE_ID=$(aws ec2 run-instances \
 
 echo "  Instance: $INSTANCE_ID"
 echo "  Waiting for running state..."
-
 aws ec2 wait instance-running --region "$REGION" --instance-ids "$INSTANCE_ID"
 
 BUILD_HOST=$(aws ec2 describe-instances --region "$REGION" \
@@ -81,29 +93,25 @@ BUILD_HOST=$(aws ec2 describe-instances --region "$REGION" \
 
 echo "  IP: $BUILD_HOST"
 echo "  Waiting for SSH..."
-
-# Wait for SSH (max 60s)
-for i in $(seq 1 12); do
+for _ in $(seq 1 12); do
     if ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=5 "ec2-user@$BUILD_HOST" "echo ok" 2>/dev/null; then
         break
     fi
     sleep 5
 done
 
-# 4. Setup build environment
 echo "=== Setting up build environment ==="
-ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "ubuntu@$BUILD_HOST" "
-    sudo apt-get update && sudo apt-get install -y gcc g++ make clang libclang-dev llvm-dev libssl-dev protobuf-compiler pkg-config perl 2>/dev/null
+ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "ec2-user@$BUILD_HOST" "
+    sudo dnf install -y gcc gcc-c++ make clang clang-devel openssl-devel protobuf-compiler pkg-config perl 2>/dev/null || \
+    sudo yum install -y gcc gcc-c++ make clang clang-devel openssl-devel protobuf-compiler pkg-config perl
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain nightly-2025-05-01
 "
 
-# 5. Upload source
 echo "=== Uploading source ==="
-scp -i "$SSH_KEY" -o StrictHostKeyChecking=no "$TAR" "ubuntu@$BUILD_HOST:~/src.tar.gz"
+scp -i "$SSH_KEY" -o StrictHostKeyChecking=no "$TAR" "ec2-user@$BUILD_HOST:~/src.tar.gz"
 
-# 6. Build
 echo "=== Compiling (this takes ~5 min on c5.2xlarge) ==="
-ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "ubuntu@$BUILD_HOST" "
+ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "ec2-user@$BUILD_HOST" "
     source \$HOME/.cargo/env
     mkdir -p ~/build && cd ~/build
     tar xzf ~/src.tar.gz
@@ -112,49 +120,51 @@ ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "ubuntu@$BUILD_HOST" "
     file target/release/rust-bc
 "
 
-# 7. Download binary
 echo "=== Downloading binary ==="
 mkdir -p "$REPO_ROOT/dist"
 scp -i "$SSH_KEY" -o StrictHostKeyChecking=no \
-    "ubuntu@$BUILD_HOST:~/build/target/release/rust-bc" \
+    "ec2-user@$BUILD_HOST:~/build/target/release/rust-bc" \
     "$REPO_ROOT/dist/$BINARY_NAME"
 
 chmod +x "$REPO_ROOT/dist/$BINARY_NAME"
 SIZE=$(du -h "$REPO_ROOT/dist/$BINARY_NAME" | cut -f1)
 echo "  Binary: $REPO_ROOT/dist/$BINARY_NAME ($SIZE)"
 
-# 8. Upload to S3
-echo "=== Uploading to S3 ==="
-aws s3 cp "$REPO_ROOT/dist/$BINARY_NAME" "s3://$S3_BUCKET/$S3_KEY" --region "$REGION"
-echo "  s3://$S3_BUCKET/$S3_KEY"
+if [[ -n "$S3_BUCKET" ]]; then
+    echo "=== Uploading to S3 ==="
+    aws s3 cp "$REPO_ROOT/dist/$BINARY_NAME" "s3://$S3_BUCKET/$S3_KEY" --region "$REGION"
+    echo "  s3://$S3_BUCKET/$S3_KEY"
+fi
 
-# 9. Terminate build instance
 echo "=== Terminating build instance ==="
 aws ec2 terminate-instances --region "$REGION" --instance-ids "$INSTANCE_ID" > /dev/null
 echo "  $INSTANCE_ID terminated"
-
-# Cleanup
 rm -f "$TAR"
 
 echo ""
 echo "=== Build complete ==="
 echo "  Binary: dist/$BINARY_NAME ($SIZE)"
-echo "  S3:     s3://$S3_BUCKET/$S3_KEY"
+if [[ -n "$S3_BUCKET" ]]; then
+    echo "  S3:     s3://$S3_BUCKET/$S3_KEY"
+fi
 echo "  Cost:   ~\$0.03"
 
-# 10. Optional deploy to prod
 if [[ "${1:-}" == "--deploy" ]]; then
+    if [[ -z "$DEPLOY_HOST" ]]; then
+        echo ""
+        echo "ERROR: --deploy requires DEPLOY_HOST (Cerulean prod EC2 removed 2026-06)."
+        exit 1
+    fi
+
     echo ""
-    echo "=== Deploying to production ($PROD_HOST) ==="
-
+    echo "=== Deploying to $DEPLOY_HOST ==="
     scp -i "$SSH_KEY" -o StrictHostKeyChecking=no \
-        "$REPO_ROOT/dist/$BINARY_NAME" "$PROD_USER@$PROD_HOST:~/cerulean-node-new"
+        "$REPO_ROOT/dist/$BINARY_NAME" "$DEPLOY_USER@$DEPLOY_HOST:~/cerulean-node-new"
 
-    ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$PROD_USER@$PROD_HOST" "
+    ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$DEPLOY_USER@$DEPLOY_HOST" "
         chmod +x ~/cerulean-node-new
         cd ~/rust-bc
         docker compose -f docker-compose.sandbox.yml down
-        # Replace binary in the image by rebuilding with prebuilt binary
         docker compose -f docker-compose.sandbox.yml up -d
     "
 

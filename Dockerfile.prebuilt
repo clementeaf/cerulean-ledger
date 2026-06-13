@@ -4,8 +4,8 @@
 #   # First, place the binary at dist/cerulean-node-linux-amd64
 #   docker build -f Dockerfile.prebuilt -t cerulean-node:latest .
 #
-# Or pull from S3:
-#   aws s3 cp s3://ceruleanledger-releases/releases/latest/cerulean-node-linux-amd64 dist/
+# Or cross-compile locally:
+#   ./scripts/deploy.sh
 #   docker build -f Dockerfile.prebuilt -t cerulean-node:latest .
 
 FROM debian:bookworm-slim

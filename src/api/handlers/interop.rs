@@ -274,7 +274,7 @@ pub async fn export_governance_jsonld(
             "@type": "Thing",
             "name": "Cerulean Ledger",
             "description": "DLT post-quantum blockchain",
-            "url": "https://ceruleanledger.com"
+            "url": "https://github.com/clementeaf/cerulean-ledger"
         }
     });
 

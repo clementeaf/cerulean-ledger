@@ -3,17 +3,17 @@ use actix_web::{web, Scope};
 #[cfg(feature = "evm")]
 use crate::api::handlers::evm;
 use crate::api::handlers::{
-    acl, alias, audit, blocks, chain, chaincode, channels, compliance, compliance_auto, contact,
-    credentials, discovery, events, forensic, gateway, governance, governance_entities, identity,
-    inference, intelligence, interop, invitations, legal_oracle, msp, notarize, oracle,
-    organizations, pentest, pin, private_data, proposals, registry, regulatory, snapshots, staking,
-    stress, tokenization, transactions, utilities, vault, zkp,
+    acl, airdrop, alias, audit, billing, blocks, chain, chaincode, channels, compliance,
+    compliance_auto, contact, contracts, credentials, discovery, events, forensic, gateway,
+    governance, governance_entities, identity, inference, intelligence, interop, invitations,
+    legal_oracle, msp, network, notarize, oracle, organizations, pentest, pin, private_data,
+    proposals, registry, regulatory, snapshots, staking, stats, stress, tokenization, transactions,
+    utilities, vault, wallets, zkp,
 };
 
 /// API routes configuration
 pub struct ApiRoutes;
 
-#[allow(dead_code)]
 impl ApiRoutes {
     /// Full configuration: metrics + standalone `/api/v1` scope with scaffold routes.
     /// Used by integration tests that don't load the legacy router.
@@ -36,7 +36,6 @@ impl ApiRoutes {
     pub fn register(scope: Scope) -> Scope {
         scope
             // Sub-scoped (have their own path prefix)
-            .service(Self::identity_routes())
             .service(Self::blocks_routes())
             .service(Self::store_blocks_routes())
             .service(Self::chain_routes())
@@ -243,10 +242,51 @@ impl ApiRoutes {
         cfg.service(invitations::create_invitation)
             .service(invitations::list_invitations)
             .service(invitations::respond_invitation);
-    }
-
-    fn identity_routes() -> Scope {
-        web::scope("/identity")
+        // Contracts (ERC-20 + NFT/ERC-721)
+        cfg.service(contracts::deploy_contract_debug)
+            .service(contracts::deploy_contract)
+            .service(contracts::get_all_contracts)
+            .service(contracts::get_contract)
+            .service(contracts::execute_contract_function)
+            .service(contracts::get_contract_balance)
+            .service(contracts::get_contract_allowance)
+            .service(contracts::get_contract_total_supply)
+            .service(contracts::get_nft_owner)
+            .service(contracts::get_nft_token_uri)
+            .service(contracts::get_nft_approved)
+            .service(contracts::get_nft_metadata)
+            .service(contracts::set_nft_metadata)
+            .service(contracts::get_nft_balance)
+            .service(contracts::get_nft_total_supply)
+            .service(contracts::get_nft_tokens_of_owner)
+            .service(contracts::get_nft_token_by_index);
+        // Airdrop
+        cfg.service(airdrop::claim_airdrop)
+            .service(airdrop::get_node_tracking)
+            .service(airdrop::get_airdrop_statistics)
+            .service(airdrop::get_eligible_nodes)
+            .service(airdrop::get_eligibility_info)
+            .service(airdrop::get_claim_history)
+            .service(airdrop::get_airdrop_tiers);
+        // Stats
+        cfg.service(stats::get_stats);
+        // Network (peers, sync, mine)
+        cfg.service(network::get_peers)
+            .service(network::connect_peer)
+            .service(network::sync_blockchain)
+            .service(network::mine_block);
+        // Wallets (balance, creation, tx history)
+        cfg.service(wallets::get_wallet_balance)
+            .service(wallets::create_wallet)
+            .service(wallets::get_wallet_transactions);
+        // Billing (API key management)
+        cfg.service(billing::create_api_key)
+            .service(billing::deactivate_api_key)
+            .service(billing::get_billing_usage);
+        // Utilities (health, version, openapi)
+        cfg.route("/health", web::get().to(utilities::health_check))
+            .route("/version", web::get().to(utilities::get_version))
+            .route("/openapi.json", web::get().to(utilities::get_openapi));
     }
 
     fn blocks_routes() -> Scope {
@@ -265,40 +305,6 @@ impl ApiRoutes {
             .service(transactions::store_get_transactions_by_block)
     }
 
-    fn store_transactions_routes() -> Scope {
-        web::scope("")
-            .service(transactions::store_write_transaction)
-            .service(transactions::store_get_transaction)
-    }
-
-    fn store_identities_routes() -> Scope {
-        web::scope("")
-            .service(identity::store_write_identity)
-            .service(identity::store_list_identities)
-            .service(identity::store_get_identity)
-    }
-
-    fn store_credentials_routes() -> Scope {
-        web::scope("")
-            .service(credentials::store_write_credential)
-            .service(credentials::store_list_credentials)
-            .service(credentials::store_get_credential)
-            .service(credentials::store_get_credentials_by_subject)
-    }
-
-    fn store_organizations_routes() -> Scope {
-        web::scope("")
-            .service(organizations::store_create_organization)
-            .service(organizations::store_list_organizations)
-            .service(organizations::store_get_organization)
-    }
-
-    fn store_policies_routes() -> Scope {
-        web::scope("")
-            .service(organizations::store_set_policy)
-            .service(organizations::store_get_policy)
-    }
-
     fn chain_routes() -> Scope {
         web::scope("/chain")
             .service(chain::verify_chain)
@@ -308,81 +314,6 @@ impl ApiRoutes {
     fn credentials_routes() -> Scope {
         web::scope("/credentials").service(interop::get_credential_as_vc)
     }
-
-    fn transaction_routes() -> Scope {
-        web::scope("")
-            .service(transactions::create_transaction)
-            .service(transactions::get_mempool)
-    }
-
-    fn proposal_routes() -> Scope {
-        web::scope("")
-            .service(proposals::submit_proposal)
-            .service(proposals::submit_endorsed_transaction)
-    }
-
-    fn channels_routes() -> Scope {
-        web::scope("")
-            .service(channels::create_channel)
-            .service(channels::list_channels)
-            .service(channels::update_channel_config)
-            .service(channels::get_channel_config)
-            .service(channels::get_channel_config_history)
-    }
-
-    fn msp_routes() -> Scope {
-        web::scope("")
-            .service(msp::revoke_serial)
-            .service(msp::get_msp_info)
-    }
-
-    fn private_data_routes() -> Scope {
-        web::scope("")
-            .service(private_data::put_private_data)
-            .service(private_data::get_private_data)
-    }
-
-    fn chaincode_routes() -> Scope {
-        web::scope("")
-            .service(chaincode::install_chaincode)
-            .service(chaincode::approve_chaincode)
-            .service(chaincode::commit_chaincode)
-            .service(chaincode::simulate_chaincode)
-    }
-
-    fn gateway_routes() -> Scope {
-        web::scope("").service(gateway::gateway_submit)
-    }
-
-    fn discovery_routes() -> Scope {
-        web::scope("")
-            .service(discovery::get_endorsers)
-            .service(discovery::get_channel_peers)
-            .service(discovery::post_register_peer)
-    }
-
-    fn events_routes() -> Scope {
-        web::scope("")
-            .service(events::events_blocks)
-            .service(events::events_blocks_filtered)
-            .service(events::events_blocks_private)
-    }
-
-    fn acl_routes() -> Scope {
-        web::scope("")
-            .service(acl::set_acl)
-            .service(acl::list_acls)
-            .service(acl::get_acl)
-    }
-
-    fn snapshot_routes() -> Scope {
-        web::scope("")
-            .service(snapshots::create_snapshot)
-            .service(snapshots::list_snapshots)
-            .service(snapshots::download_snapshot)
-    }
-
-    // utilities (health, version, openapi) registered as .route() in register()
 }
 
 #[cfg(test)]

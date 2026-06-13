@@ -6,6 +6,33 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) · Versioning: 
 
 ## [Unreleased]
 
+### 2026-06-13
+
+**API scaffold migration — legacy router eliminated**
+
+- Migrated all legacy endpoints to scaffold handlers (`src/api/handlers/`):
+  - `billing.rs` — API key create/deactivate/usage (3 endpoints)
+  - `wallets.rs` — balance, create, transaction history (3 endpoints)
+  - `network.rs` — peers, connect, sync, mine (4 endpoints)
+  - `stats.rs` — system statistics (1 endpoint)
+  - `airdrop.rs` — claim, tracking, statistics, eligibility, history, tiers (7 endpoints)
+  - `contracts.rs` — ERC-20 + ERC-721 deploy, execute, queries (18 endpoints)
+- Utilities (health, version, openapi) registered in scaffold router
+- Staking deduplication: removed legacy handlers, scaffold is the single source
+- `api_legacy.rs` collapsed from ~2250 lines to 13 (only `config_routes` delegating to scaffold)
+- Removed 16 dead scope helper methods and empty `identity_routes()` from `routes.rs`
+- Removed `#[allow(dead_code)]` from `ApiRoutes` impl block
+- All handlers now use typed `ApiError`, `ApiResponse` with trace ID, and `enforce_acl`
+
+### 2026-06-08
+
+**AWS hosting decommissioned**
+
+- Cerulean-only AWS resources removed: EC2, CloudFront, S3 buckets, Route53 zone, ACM cert, security groups, key pair, orphan EBS
+- Domain `ceruleanledger.com` deletion initiated (pending registrant email authorization)
+- Deploy scripts updated: no hardcoded IPs or retired S3 bucket; remote targets via `DEPLOY_HOST` / `RELEASE_URL` env vars
+- `interop.rs` instrument URL → GitHub repository
+
 ### 2026-05-30
 
 **Notarization — Proof of Existence service**
@@ -157,7 +184,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) · Versioning: 
 - `scripts/install-cerulean.sh` — one-line installer for Linux servers (systemd service, zero dependencies)
 - `scripts/build-release.sh` — disposable EC2 spot build (~$0.03 per release)
 - `Dockerfile.prebuilt` — runtime-only image from precompiled binary (no compilation)
-- Binaries hosted at `s3://ceruleanledger-releases/`
+- Binaries hosted at `s3://ceruleanledger-releases/` *(retired 2026-06)*
 - Production downsized from t3.medium to t3.small ($15/mo)
 
 ---
@@ -348,7 +375,7 @@ Cleanup:
 
 ### 2026-05-13
 
-**Production deployment — S3/CloudFront + EC2 backend**
+**Production deployment — S3/CloudFront + EC2 backend** *(retired 2026-06)*
 
 - Frontend hosting migrated to S3 + CloudFront (Explorer + Voto)
 - Domain `ceruleanledger.com` registered with ACM SSL certificate
